@@ -1,0 +1,7 @@
+[deps]
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
+Git = "d7ba0133-e1db-5d97-8f8c-041e4b3a1eb2"
+LazyArtifacts = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
+Sandbox = "9307e30f-c43e-9ca7-d17c-c2dc59df670d"
+Scratch = "6c6a2e73-6563-6170-7368-637461726353"
+elfshaker_jll = "3654c272-9f13-50b0-a4d5-1f2e7e802f45"

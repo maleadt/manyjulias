@@ -1,0 +1,15 @@
+[package_linux]
+git-tree-sha1 = "104eaa2e0f648fd5de41697329b544a92f3edabf"
+lazy = true
+
+    [[package_linux.download]]
+    sha256 = "20b8706720ae9d1471abc209c704570b7a7596c7d953050ac1f27094fd31bbf2"
+    url = "https://github.com/JuliaCI/rootfs-images/releases/download/v5.31/package_linux.x86_64.tar.gz"
+
+[rootfs]
+git-tree-sha1 = "f62dafbab4644d0e211a0c13a7e658f0f2baf3bf"
+lazy = true
+
+    [[rootfs.download]]
+    sha256 = "52873704aca26e6eed2c4276c21045c80796bac9825080eb0e35aa6af8bb4a7a"
+    url = "https://github.com/maleadt/manyjulias/releases/download/v0.1/rootfs-20221212.tar.xz"
