@@ -1,10 +1,22 @@
-using ProgressMeter
+#!/usr/bin/env julia
 
-include("common.jl")
+using Pkg
+Pkg.activate(dirname(@__DIR__))
+
+using manyjulias
+using ProgressMeter, Sandbox, Scratch, LazyArtifacts, Git, DataStructures
 
 const COMMITS_PER_PACK = 250
 #const START_COMMIT = "ddf7ce9a595b0c84fbed1a42e8c987a9fdcddaac" # 1.6 branch point
 const START_COMMIT = "7fe6b16f4056906c99cee1ca8bbed08e2c154c1a" # 1.10 branch point
+
+const download_dir = @get_scratch!("downloads")
+const julia = joinpath(download_dir, "julia")
+
+# we use a workdir in scratch, because /tmp might be size-limited tmpfs
+const workdir = @get_scratch!("workdir")
+rm(workdir; recursive=true, force=true)
+mkpath(workdir)
 
 # to get closer to CI-generated binaries, use a multiversioned build
 const default_cpu_target = if Sys.ARCH == :x86_64
@@ -21,17 +33,6 @@ else
     @warn "Cannot determine JULIA_CPU_TARGET for unknown architecture $(Sys.ARCH)"
     ""
 end
-
-const download_dir = @get_scratch!("downloads")
-const julia = joinpath(download_dir, "julia")
-
-# we use a workdir in scratch, because /tmp might be size-limited tmpfs
-const workdir = @get_scratch!("workdir")
-rm(workdir; recursive=true, force=true)
-mkpath(workdir)
-
-
-## build
 
 struct BuildError <: Exception
     log::String
@@ -140,40 +141,32 @@ function build(commit; nproc=Sys.CPU_THREADS)
     end
 end
 
-
-## storage
-
-function safe_name(name)
-    # Only latin letters, digits, -, _ and / are allowed
-    return replace(name, r"[^a-zA-Z0-9\-_\/]" => "_")
-end
-
 function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
     # check if we need to clean the slate
-    unrelated_loose_commits = filter(list().loose) do commit
+    unrelated_loose_commits = filter(manyjulias.list().loose) do commit
         !(commit in commits)
     end
     if !isempty(unrelated_loose_commits)
         @info "Unrelated loose commits detected; removing"
-        rm_loose()
+        manyjulias.rm_loose()
         # XXX: this may remove too much, but I don't think it's possible to remove select
         #      loose commits, as there's both the indices and the actual objects.
         #      elfshaker gc would help here (elfshaker/elfshaker#97)
     end
-    loose_commits = list().loose
+    loose_commits = manyjulias.list().loose
 
     # re-extract any packed commits we'll need again
-    packs = list().packed
+    packs = manyjulias.list().packed
     packed_commits = isempty(packs) ? [] : union(values(packs)...)
     required_packed_commits = filter(commits) do commit
         commit in packed_commits && !(commit in loose_commits)
     end
     for commit in required_packed_commits
-        dir = extract(commit)
-        store(commit; dir)
+        dir = manyjulias.extract(commit)
+        manyjulias.store(commit; dir)
         rm(dir; recursive=true)
     end
-    loose_commits = list().loose
+    loose_commits = manyjulias.list().loose
 
     # the remaining commits need to be built
     remaining_commits = filter(commits) do commit
@@ -186,7 +179,7 @@ function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
         try
             dir = build(commit; nproc=1)
             lock(elfshaker_lock) do
-                store(commit; dir)
+                manyjulias.store(commit; dir)
             end
             rm(dir; recursive=true)
         catch err
@@ -201,24 +194,24 @@ function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
 
     # pack everything and clean up
     @info "Packing $pack_name"
-    pack(safe_name("julia-$(pack_name)"))
-    rm_loose()
+    manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"))
+    manyjulias.rm_loose()
 end
-
-
-## main
 
 function main(; update=true)
     global START_COMMIT
 
     # clone Julia
     if !ispath(joinpath(julia, "config"))
+        @info "Cloning Julia repository..."
         run(`$(git()) clone --mirror --quiet https://github.com/JuliaLang/julia $julia`)
     elseif update
+        @info "Updating Julia repository..."
         run(`$(git()) -C $julia fetch --quiet --force origin`)
     end
 
     # list all commits we care about
+    @info "Listing commits..."
     commits = let
         commits = String[]
         for line in eachline(`$(git()) -C $julia rev-list --reverse --first-parent $(START_COMMIT)\~..master`)
@@ -230,13 +223,15 @@ function main(; update=true)
     end
 
     # group into packs
+    @info "Structuring in packs..."
     packs = OrderedDict()
     for commit_chunk in Iterators.partition(commits, COMMITS_PER_PACK)
-        packs[commit_name(first(commit_chunk))] = commit_chunk
+        packs[manyjulias.commit_name(julia, first(commit_chunk))] = commit_chunk
     end
 
     # find the latest commit we've already stored; we won't pack anything before that
-    available_commits = Set(union(list().loose, values(list().packed)...))
+    available_commits = Set(union(manyjulias.list().loose,
+                                  values(manyjulias.list().packed)...))
     last_commit = nothing
     for commit in reverse(commits)
         if commit in available_commits
@@ -245,10 +240,11 @@ function main(; update=true)
         end
     end
     if last_commit !== nothing
-        @info "Last stored commit: $last_commit ($(commit_name(last_commit)))"
+        @info "Last stored commit: $last_commit ($(manyjulias.commit_name(julia, last_commit)))"
     end
 
     # create each pack
+    @info "Creating packs..."
     for (pack_name, commit_chunk) in packs
         remaining_commits = if last_commit === nothing
             commit_chunk
