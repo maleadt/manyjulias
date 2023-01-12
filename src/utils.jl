@@ -3,22 +3,22 @@ function safe_name(name)
     return replace(name, r"[^a-zA-Z0-9\-_\/]" => "_")
 end
 
-# Julia version of contrib/commit-name.sh
-function commit_name(julia, commit)
-    version = readchomp(`$(git()) -C $julia show $commit:VERSION`)
-    endswith(version, "-DEV") || error("Only commits from the master branch are supported")
-
-    branch_commit = let
-        blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
-        split(blame)[1]
+function parse_args(args)
+    opts = Dict{String,Union{String,Missing}}()
+    for arg in args
+        if startswith(arg, "--")
+            if contains(arg, "=")
+                key, val = split(arg, "="; limit=2)
+                opts[key[3:end]] = val
+            else
+                opts[arg[3:end]] = missing
+            end
+        end
     end
 
-    commits = let
-        count = readchomp(`$(git()) -C $julia rev-list --count $commit "^$branch_commit"`)
-        parse(Int, count)
+    args = filter(args) do arg
+        !startswith(arg, "--")
     end
 
-    return "$version.$(commits)"
-
-    return (; version, commits)
+    return args, opts
 end
