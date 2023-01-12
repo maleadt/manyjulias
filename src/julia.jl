@@ -36,6 +36,8 @@ julia_checkout(commit) = julia_checkout!(commit, mktempdir())
 # populate Julia's srccache
 function populate_srccache!(source_dir)
     srccache = joinpath(download_dir, "srccache")
+    mkpath(srccache)
+
     repo_srccache = joinpath(source_dir, "deps", "srccache")
     cp(srccache, repo_srccache)
     run(ignorestatus(setenv(`make -C deps getall NO_GIT=1`; dir=source_dir)),

@@ -30,6 +30,8 @@ struct BuildError <: Exception
     log::String
 end
 
+const internet_lock = ReentrantLock()
+
 # build a Julia commit and return the path to the install directory.
 # consumes the source directory.
 function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS)
@@ -46,9 +48,12 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS)
         end
 
         # build and install Julia
+        rootfs = lock(internet_lock) do
+            artifact"package_linux"
+        end
         config = SandboxConfig(
             # ro
-            Dict("/"        => artifact"package_linux"),
+            Dict("/"        => rootfs),
             # rw
             Dict("/source"  => source_dir,
                  "/install" => install_dir),
@@ -153,7 +158,9 @@ function pack(pack_name, commits; workdir, datadir, ntasks)
             source_dir = mktempdir(workdir)
             manyjulias.julia_checkout!(commit, source_dir)
             try
-                manyjulias.populate_srccache!(source_dir)
+                lock(internet_lock) do
+                    manyjulias.populate_srccache!(source_dir)
+                end
             catch err
                 @error "Failed to populate srccache for $commit" exception=(err, catch_backtrace())
             end
@@ -199,11 +206,11 @@ function main(args; update=true)
     haskey(opts, "help") && usage()
     haskey(opts, "datadir") || usage("Missing --datadir")
 
-    datadir = expanduser(opts["datadir"])
+    datadir = abspath(expanduser(opts["datadir"]))
     mkpath(datadir)
 
     workdir = if haskey(opts, "workdir")
-        expanduser(opts["workdir"])
+        abspath(expanduser(opts["workdir"]))
     else
         mktempdir()
     end
