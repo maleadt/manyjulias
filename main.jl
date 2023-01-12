@@ -1,8 +1,9 @@
-using Sandbox, Scratch, Git, LazyArtifacts, TOML, DataStructures
+using Sandbox, Scratch, Git, LazyArtifacts, TOML, DataStructures, ProgressMeter
 using elfshaker_jll
 
 const COMMITS_PER_PACK = 250
-const START_COMMIT = "ddf7ce9a595b0c84fbed1a42e8c987a9fdcddaac" # 1.6 branch point
+#const START_COMMIT = "ddf7ce9a595b0c84fbed1a42e8c987a9fdcddaac" # 1.6 branch point
+const START_COMMIT = "7fe6b16f4056906c99cee1ca8bbed08e2c154c1a" # 1.10 branch point
 
 # to get closer to CI-generated binaries, use a multiversioned build
 const default_cpu_target = if Sys.ARCH == :x86_64
@@ -59,8 +60,7 @@ function build(commit; nproc=Sys.CPU_THREADS)
         # define a Make.user
         open("$checkout/Make.user", "w") do io
             println(io, "prefix=/install")
-            #println(io, "JULIA_CPU_TARGET=$default_cpu_target")
-            println(io, "JULIA_PRECOMPILE=0")
+            println(io, "JULIA_CPU_TARGET=$default_cpu_target")
 
             # make generated code easier to delta-diff
             println(io, "CFLAGS=-ffunction-sections -fdata-sections")
@@ -307,7 +307,6 @@ function main(; update=false)
     if last_commit !== nothing
         @info "Last stored commit: $last_commit ($(commit_name(last_commit)))"
     end
-    @show last_commit
 
     # create each pack
     for (pack_name, commit_chunk) in packs
@@ -335,6 +334,11 @@ function main(; update=false)
     return
 end
 
+function safe_name(name)
+    # Only latin letters, digits, -, _ and / are allowed
+    return replace(name, r"[^a-zA-Z0-9\-_\/]" => "_")
+end
+
 function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(list().loose) do commit
@@ -350,7 +354,8 @@ function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
     loose_commits = list().loose
 
     # re-extract any packed commits we'll need again
-    packed_commits = union(values(list().packed)...)
+    packs = list().packed
+    packed_commits = isempty(packs) ? [] : union(values(packs)...)
     required_packed_commits = filter(commits) do commit
         commit in packed_commits && !(commit in loose_commits)
     end
@@ -367,6 +372,7 @@ function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
     end
     @info "Need to build $(length(remaining_commits)) commits to complete pack $pack_name"
     elfshaker_lock = ReentrantLock()
+    p = Progress(length(remaining_commits); desc="Building pack: ")
     asyncmap(remaining_commits; ntasks) do commit
         try
             dir = build(commit; nproc=1)
@@ -375,15 +381,17 @@ function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
             end
             rm(dir; recursive=true)
         catch err
-            isa(error, BuildError) || rethrow(err)
+            isa(err, BuildError) || rethrow(err)
             err_lines = split(err.log, '\n')
-            err_tail = join(err_lines[end-50:end], '\n')
+            err_tail = join(err_lines[end-min(50,length(err_lines))+1:end], '\n')
             @error "Failed to build $commit:\n$err_tail"
+        finally
+            next!(p)
         end
     end
 
     # pack everything and clean up
     @info "Packing $pack_name"
-    pack(pack_name)
+    pack(safe_name("julia-$(pack_name)"))
     rm_loose()
 end
