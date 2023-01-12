@@ -1,5 +1,6 @@
-using Sandbox, Scratch, Git, LazyArtifacts, TOML, DataStructures, ProgressMeter
-using elfshaker_jll
+using ProgressMeter
+
+include("common.jl")
 
 const COMMITS_PER_PACK = 250
 #const START_COMMIT = "ddf7ce9a595b0c84fbed1a42e8c987a9fdcddaac" # 1.6 branch point
@@ -21,20 +22,22 @@ else
     ""
 end
 
-download_dir = @get_scratch!("downloads")
-julia = joinpath(download_dir, "julia")
-
-elfshaker_dir = @get_scratch!("elfshaker_data")
+const download_dir = @get_scratch!("downloads")
+const julia = joinpath(download_dir, "julia")
 
 # we use a workdir in scratch, because /tmp might be size-limited tmpfs
-workdir = @get_scratch!("workdir")
+const workdir = @get_scratch!("workdir")
 rm(workdir; recursive=true, force=true)
 mkpath(workdir)
+
+
+## build
 
 struct BuildError <: Exception
     log::String
 end
 
+# build a Julia commit and return the path to the install directory
 function build(commit; nproc=Sys.CPU_THREADS)
     checkout = mktempdir(workdir)
     install_dir = mktempdir(workdir)
@@ -137,138 +140,75 @@ function build(commit; nproc=Sys.CPU_THREADS)
     end
 end
 
-function prepare(dir)
-    # elfshaker doesn't store some properties that we care about, such as file modes
-    # and symbolic links. we'll package those up in a metadata file
 
-    modes = OrderedDict()
-    links = OrderedDict()
-    function scan_dir(subdir)
-        for entry in readdir(joinpath(dir, subdir))
-            relative_path = joinpath(subdir, entry)
-            absolute_path = joinpath(dir, relative_path)
-            modes[relative_path] = "0o$(string(stat(absolute_path).mode; base=8))"
-            if islink(absolute_path)
-                links[relative_path] = readlink(absolute_path)
-            elseif isdir(absolute_path)
-                scan_dir(relative_path)
+## storage
+
+function safe_name(name)
+    # Only latin letters, digits, -, _ and / are allowed
+    return replace(name, r"[^a-zA-Z0-9\-_\/]" => "_")
+end
+
+function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
+    # check if we need to clean the slate
+    unrelated_loose_commits = filter(list().loose) do commit
+        !(commit in commits)
+    end
+    if !isempty(unrelated_loose_commits)
+        @info "Unrelated loose commits detected; removing"
+        rm_loose()
+        # XXX: this may remove too much, but I don't think it's possible to remove select
+        #      loose commits, as there's both the indices and the actual objects.
+        #      elfshaker gc would help here (elfshaker/elfshaker#97)
+    end
+    loose_commits = list().loose
+
+    # re-extract any packed commits we'll need again
+    packs = list().packed
+    packed_commits = isempty(packs) ? [] : union(values(packs)...)
+    required_packed_commits = filter(commits) do commit
+        commit in packed_commits && !(commit in loose_commits)
+    end
+    for commit in required_packed_commits
+        dir = extract(commit)
+        store(commit; dir)
+        rm(dir; recursive=true)
+    end
+    loose_commits = list().loose
+
+    # the remaining commits need to be built
+    remaining_commits = filter(commits) do commit
+        !(commit in loose_commits)
+    end
+    @info "Need to build $(length(remaining_commits)) commits to complete pack $pack_name"
+    elfshaker_lock = ReentrantLock()
+    p = Progress(length(remaining_commits); desc="Building pack: ")
+    asyncmap(remaining_commits; ntasks) do commit
+        try
+            dir = build(commit; nproc=1)
+            lock(elfshaker_lock) do
+                store(commit; dir)
             end
-        end
-    end
-    scan_dir("./")
-
-    metadata = OrderedDict(
-        "modes" => modes,
-        "links" => links,
-    )
-
-    metadata_file = joinpath(dir, "metadata.toml")
-    @assert !isfile(metadata_file)
-    open(metadata_file, "w") do io
-        TOML.print(io, metadata)
-    end
-end
-
-function unprepare(dir)
-    metadata_file = joinpath(dir, "metadata.toml")
-    @assert isfile(metadata_file)
-
-    metadata = TOML.parsefile(metadata_file)
-
-    for (relative_path, dest) in metadata["links"]
-        absolute_path = joinpath(dir, relative_path)
-        if ispath(absolute_path)
-            @assert islink(absolute_path) && readlink(absolute_path) == dest
-        else
-            symlink(dest, absolute_path)
+            rm(dir; recursive=true)
+        catch err
+            isa(err, BuildError) || rethrow(err)
+            err_lines = split(err.log, '\n')
+            err_tail = join(err_lines[end-min(50,length(err_lines))+1:end], '\n')
+            @error "Failed to build $commit:\n$err_tail"
+        finally
+            next!(p)
         end
     end
 
-    for (relative_path, mode) in metadata["modes"]
-        absolute_path = joinpath(dir, relative_path)
-        chmod(absolute_path, parse(Int, mode))
-    end
-
-    rm(metadata_file)
+    # pack everything and clean up
+    @info "Packing $pack_name"
+    pack(safe_name("julia-$(pack_name)"))
+    rm_loose()
 end
 
-# XXX: prepare install dir; record symlink and permissions
 
-function elfshaker_cmd(args; dir=nothing)
-    if dir === nothing
-        `$(elfshaker()) --data-dir $elfshaker_dir $args`
-    else
-        setenv(`$(elfshaker()) --data-dir $elfshaker_dir $args`; dir)
-    end
-end
+## main
 
-function store(commit; dir)
-    prepare(dir)
-    run(elfshaker_cmd(`store $commit`; dir))
-end
-
-function list()
-    loose = String[]
-    packed = Dict{String,Vector{String}}()
-    for line in eachline(elfshaker_cmd(`list`))
-        m = match(r"^loose/(.+):\1$", line)
-        if m !== nothing
-            commit = m.captures[1]
-            push!(loose, commit)
-            continue
-        end
-
-        m = match(r"^(.+):(.+)$", line)
-        if m !== nothing
-            pack = m.captures[1]
-            commit = m.captures[2]
-            push!(get!(packed, pack, String[]), commit)
-            continue
-        end
-
-        @error "Unexpected list output" line
-    end
-
-    return (; loose, packed)
-end
-
-# remove all loose packs
-function rm_loose()
-    rm(joinpath(elfshaker_dir, "loose"); recursive=true, force=true)
-    rm(joinpath(elfshaker_dir, "packs", "loose"); recursive=true, force=true)
-end
-
-function pack(name)
-    run(elfshaker_cmd(`pack $name`))
-end
-
-function extract(commit; dir=mktempdir(workdir))
-    run(elfshaker_cmd(`extract --reset $commit`; dir))
-    unprepare(dir)
-    return dir
-end
-
-# Julia version of contrib/commit-name.sh
-function commit_name(commit)
-    version = readchomp(`$(git()) -C $julia show $commit:VERSION`)
-    endswith(version, "-DEV") || error("Only commits from the master branch are supported")
-
-    branch_commit = let
-        blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
-        split(blame)[1]
-    end
-
-    commits = let
-        count = readchomp(`$(git()) -C $julia rev-list --count $commit "^$branch_commit"`)
-        parse(Int, count)
-    end
-
-    return "$version.$(commits)"
-
-    return (; version, commits)
-end
-
-function main(; update=false)
+function main(; update=true)
     global START_COMMIT
 
     # clone Julia
@@ -334,64 +274,4 @@ function main(; update=false)
     return
 end
 
-function safe_name(name)
-    # Only latin letters, digits, -, _ and / are allowed
-    return replace(name, r"[^a-zA-Z0-9\-_\/]" => "_")
-end
-
-function pack(pack_name, commits; ntasks=Sys.CPU_THREADS)
-    # check if we need to clean the slate
-    unrelated_loose_commits = filter(list().loose) do commit
-        !(commit in commits)
-    end
-    if !isempty(unrelated_loose_commits)
-        @info "Unrelated loose commits detected; removing"
-        rm_loose()
-        # XXX: this may remove too much, but I don't think it's possible to remove select
-        #      loose commits, as there's both the indices and the actual objects.
-        #      elfshaker gc would help here (elfshaker/elfshaker#97)
-    end
-    loose_commits = list().loose
-
-    # re-extract any packed commits we'll need again
-    packs = list().packed
-    packed_commits = isempty(packs) ? [] : union(values(packs)...)
-    required_packed_commits = filter(commits) do commit
-        commit in packed_commits && !(commit in loose_commits)
-    end
-    for commit in required_packed_commits
-        dir = extract(commit)
-        store(commit; dir)
-        rm(dir; recursive=true)
-    end
-    loose_commits = list().loose
-
-    # the remaining commits need to be built
-    remaining_commits = filter(commits) do commit
-        !(commit in loose_commits)
-    end
-    @info "Need to build $(length(remaining_commits)) commits to complete pack $pack_name"
-    elfshaker_lock = ReentrantLock()
-    p = Progress(length(remaining_commits); desc="Building pack: ")
-    asyncmap(remaining_commits; ntasks) do commit
-        try
-            dir = build(commit; nproc=1)
-            lock(elfshaker_lock) do
-                store(commit; dir)
-            end
-            rm(dir; recursive=true)
-        catch err
-            isa(err, BuildError) || rethrow(err)
-            err_lines = split(err.log, '\n')
-            err_tail = join(err_lines[end-min(50,length(err_lines))+1:end], '\n')
-            @error "Failed to build $commit:\n$err_tail"
-        finally
-            next!(p)
-        end
-    end
-
-    # pack everything and clean up
-    @info "Packing $pack_name"
-    pack(safe_name("julia-$(pack_name)"))
-    rm_loose()
-end
+isinteractive() || main()
