@@ -1,6 +1,6 @@
 module manyjulias
 
-using Scratch, Git, TOML, DataStructures, ProgressMeter, LazyArtifacts, JSON3, Random
+using Scratch, Git, TOML, DataStructures, LazyArtifacts, JSON3, Random
 using elfshaker_jll, crun_jll
 
 include("utils.jl")
