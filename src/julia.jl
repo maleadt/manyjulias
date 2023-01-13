@@ -111,9 +111,12 @@ function julia_commits(version)
     version_branch = julia_branch_name(version)
 
     commits = String[]
-    for line in eachline(`$(git()) -C $julia rev-list --reverse --first-parent $(start_commit)\~..$version_branch`)
-        # NOTE: --first-parent in order to exclude merged commits, because those don't
-        #       have a unique version number (they can alias)
+    for line in eachline(`$(git()) -C $julia rev-list --reverse --topo-order $(start_commit)\~..$version_branch`)
+        # NOTE: for the commits to be named uniquely according to julia_commit_name, we'd
+        #       need to specify --first-parent in order to exclude merged commits.
+        #       however, as that reduces the usefulness (e.g. to bisect backports),
+        #       we include all commits, albeit in topological order so that introducing
+        #       a merge shouldn't ever invalidate older, finalized packs.
         push!(commits, line)
     end
     return commits
