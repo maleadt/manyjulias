@@ -161,7 +161,7 @@ function main(args; update=true)
         build_pack(commit_chunk, remaining_commits; work_dir, ntasks)
 
         # close all but the final pack
-        if i !== lastindex(packs)
+        if i !== length(packs)
             @info "Closing $pack_name"
             manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"))
             manyjulias.rm_loose()
