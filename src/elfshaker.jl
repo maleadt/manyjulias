@@ -1,18 +1,18 @@
-function elfshaker_cmd(args; datadir, workdir=nothing)
-    if workdir === nothing
-        `$(elfshaker()) --data-dir $datadir $args`
+function elfshaker_cmd(args; dir=nothing)
+    if dir === nothing
+        `$(elfshaker()) --data-dir $(elfshaker_dir) $args`
     else
-        setenv(`$(elfshaker()) --data-dir $datadir $args`; dir=workdir)
+        setenv(`$(elfshaker()) --data-dir $(elfshaker_dir) $args`; dir)
     end
 end
 
 
 ## wrappers
 
-function list(; datadir)
+function list()
     loose = String[]
     packed = Dict{String,Vector{String}}()
-    for line in eachline(elfshaker_cmd(`list`; datadir))
+    for line in eachline(elfshaker_cmd(`list`))
         m = match(r"^loose/(.+):\1$", line)
         if m !== nothing
             commit = m.captures[1]
@@ -34,27 +34,26 @@ function list(; datadir)
     return (; loose, packed)
 end
 
-function store!(commit, dir; datadir)
+function store!(commit, dir)
     prepare(dir)
-    run(elfshaker_cmd(`store $commit`; datadir, workdir=dir))
+    run(elfshaker_cmd(`store $commit`; dir))
     rm(dir; recursive=true)
 end
 
 function extract!(commit, dir)
-    run(elfshaker_cmd(`extract --reset $commit`; datadir, workdir=dir))
+    run(elfshaker_cmd(`extract --reset $commit`; dir))
     unprepare(dir)
     return dir
 end
-extract(commit; datadir) = extract!(commit, mktempdir(workdir); datadir)
 
 # remove all loose packs
-function rm_loose(; datadir)
-    rm(joinpath(datadir, "loose"); recursive=true, force=true)
-    rm(joinpath(datadir, "packs", "loose"); recursive=true, force=true)
+function rm_loose()
+    rm(joinpath(elfshaker_dir, "loose"); recursive=true, force=true)
+    rm(joinpath(elfshaker_dir, "packs", "loose"); recursive=true, force=true)
 end
 
-function pack(name; datadir)
-    run(elfshaker_cmd(`pack $name`; datadir))
+function pack(name)
+    run(elfshaker_cmd(`pack $name`))
 end
 
 

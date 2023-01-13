@@ -4,147 +4,38 @@ using Pkg
 Pkg.activate(dirname(@__DIR__))
 
 using manyjulias
-using ProgressMeter, Sandbox, Scratch, LazyArtifacts, Git, DataStructures
+using Git, DataStructures, ProgressMeter
 
 const COMMITS_PER_PACK = 250
 #const START_COMMIT = "ddf7ce9a595b0c84fbed1a42e8c987a9fdcddaac" # 1.6 branch point
 const START_COMMIT = "7fe6b16f4056906c99cee1ca8bbed08e2c154c1a" # 1.10 branch point
 
-# to get closer to CI-generated binaries, use a multiversioned build
-const default_cpu_target = if Sys.ARCH == :x86_64
-    "generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1)"
-elseif Sys.ARCH == :i686
-    "pentium4;sandybridge,-xsaveopt,clone_all"
-elseif Sys.ARCH == :armv7l
-    "armv7-a;armv7-a,neon;armv7-a,neon,vfp4"
-elseif Sys.ARCH == :aarch64
-    "generic;cortex-a57;thunderx2t99;carmel"
-elseif Sys.ARCH == :powerpc64le
-    "pwr8"
-else
-    @warn "Cannot determine JULIA_CPU_TARGET for unknown architecture $(Sys.ARCH)"
-    ""
-end
-
-struct BuildError <: Exception
-    log::String
-end
-
-const internet_lock = ReentrantLock()
-
-# build a Julia commit and return the path to the install directory.
-# consumes the source directory.
-function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS)
-    # check-out the commit
-    try
-        # define a Make.user
-        open("$source_dir/Make.user", "w") do io
-            println(io, "prefix=/install")
-            println(io, "JULIA_CPU_TARGET=$default_cpu_target")
-
-            # make generated code easier to delta-diff
-            println(io, "CFLAGS=-ffunction-sections -fdata-sections")
-            println(io, "CXXFLAGS=-ffunction-sections -fdata-sections")
-        end
-
-        # build and install Julia
-        rootfs = lock(internet_lock) do
-            artifact"package_linux"
-        end
-        config = SandboxConfig(
-            # ro
-            Dict("/"        => rootfs),
-            # rw
-            Dict("/source"  => source_dir,
-                 "/install" => install_dir),
-            Dict("nproc"    => string(nproc));
-            uid=1000, gid=1000
-        )
-        script = raw"""
-            set -ue
-            cd /source
-
-            # Julia 1.6 requires a functional gfortran, but only for triple detection
-            echo 'echo "GNU Fortran (GCC) 9.0.0"' > /usr/local/bin/gfortran
-            chmod +x /usr/local/bin/gfortran
-
-            # old releases somtimes contain bad checksums; ignore those
-            sed -i 's/exit 2$/exit 0/g' deps/tools/jlchecksum
-
-            make -j${nproc} install
-
-            contrib/fixup-libgfortran.sh /install/lib/julia
-            contrib/fixup-libstdc++.sh /install/lib /install/lib/julia
-        """
-        with_executor() do exe
-            input = Pipe()
-            output = Pipe()
-
-            cmd = Sandbox.build_executor_command(exe, config, `/bin/bash -l`)
-            cmd = pipeline(cmd; stdin=input, stdout=output, stderr=output)
-            proc = run(cmd; wait=false)
-            close(output.in)
-
-            println(input, script)
-            close(input)
-
-            # collect output
-            log_monitor = @async begin
-                io = IOBuffer()
-                while !eof(output)
-                    line = readline(output; keep=true)
-                    print(io, line)
-                end
-                return String(take!(io))
-            end
-
-            wait(proc)
-            close(output)
-            log = fetch(log_monitor)
-
-            if !success(proc)
-                throw(BuildError(log))
-            end
-        end
-
-        # remove some useless stuff
-        rm(joinpath(install_dir, "share", "doc"); recursive=true, force=true)
-        rm(joinpath(install_dir, "share", "man"); recursive=true, force=true)
-
-        return install_dir
-    catch
-        rm(install_dir; recursive=true)
-        rethrow()
-    finally
-        rm(source_dir; recursive=true)
-    end
-end
-
-function pack(pack_name, commits; workdir, datadir, ntasks)
+function build_pack(pack_name, commits; workdir, ntasks)
     # check if we need to clean the slate
-    unrelated_loose_commits = filter(manyjulias.list(; datadir).loose) do commit
+    unrelated_loose_commits = filter(manyjulias.list().loose) do commit
         !(commit in commits)
     end
     if !isempty(unrelated_loose_commits)
         @info "Unrelated loose commits detected; removing"
-        manyjulias.rm_loose(; datadir)
+        manyjulias.rm_loose()
         # XXX: this may remove too much, but I don't think it's possible to remove select
         #      loose commits, as there's both the indices and the actual objects.
         #      elfshaker gc would help here (elfshaker/elfshaker#97)
     end
-    loose_commits = manyjulias.list(; datadir).loose
+    loose_commits = manyjulias.list().loose
 
     # re-extract any packed commits we'll need again
-    packs = manyjulias.list(; datadir).packed
+    packs = manyjulias.list().packed
     packed_commits = isempty(packs) ? [] : union(values(packs)...)
     required_packed_commits = filter(commits) do commit
         commit in packed_commits && !(commit in loose_commits)
     end
     for commit in required_packed_commits
-        dir = manyjulias.extract(commit; datadir)
-        manyjulias.store!(commit, dir; datadir)
+        dir = mktempdir(workdir)
+        manyjulias.extract!(commit, dir)
+        manyjulias.store!(commit, dir)
     end
-    loose_commits = manyjulias.list(; datadir).loose
+    loose_commits = manyjulias.list().loose
 
     # the remaining commits need to be built
     remaining_commits = filter(commits) do commit
@@ -154,23 +45,18 @@ function pack(pack_name, commits; workdir, datadir, ntasks)
     elfshaker_lock = ReentrantLock()
     p = Progress(length(remaining_commits); desc="Building pack: ")
     asyncmap(remaining_commits; ntasks) do commit
+        source_dir = mktempdir(workdir)
+        install_dir = mktempdir(workdir)
         try
-            source_dir = mktempdir(workdir)
             manyjulias.julia_checkout!(commit, source_dir)
-            try
-                lock(internet_lock) do
-                    manyjulias.populate_srccache!(source_dir)
-                end
-            catch err
-                @error "Failed to populate srccache for $commit" exception=(err, catch_backtrace())
-            end
-            install_dir = mktempdir(workdir)
-            build!(source_dir, install_dir; nproc=1)
+            echo = ntasks == 1
+            manyjulias.build!(source_dir, install_dir; nproc=1, echo)
+            exit(1)
             lock(elfshaker_lock) do
-                manyjulias.store!(commit, install_dir; datadir)
+                manyjulias.store!(commit, install_dir)
             end
         catch err
-            if !isa(err, BuildError)
+            if !isa(err, manyjulias.BuildError)
                 @error "Unexpected error while building $commit" exception=(err, catch_backtrace())
                 rethrow(err)
             end
@@ -178,14 +64,16 @@ function pack(pack_name, commits; workdir, datadir, ntasks)
             err_tail = join(err_lines[end-min(50,length(err_lines))+1:end], '\n')
             @error "Failed to build $commit:\n$err_tail"
         finally
+            rm(source_dir; recursive=true, force=true)
+            rm(install_dir; recursive=true, force=true)
             next!(p)
         end
     end
 
     # pack everything and clean up
     @info "Packing $pack_name"
-    manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"); datadir)
-    manyjulias.rm_loose(; datadir)
+    manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"))
+    manyjulias.rm_loose()
 end
 
 function usage(error=nothing)
@@ -197,22 +85,23 @@ function usage(error=nothing)
             --help              Show this help message
             --workdir           Temporary storage location.
             --datadir           Where to store the generated packs.
-            --threads <n>       Use <n> threads for building (default: $(Sys.CPU_THREADS))""")
+            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS))""")
     exit(error === nothing ? 0 : 1)
 end
 
 function main(args; update=true)
     args, opts = manyjulias.parse_args(args)
     haskey(opts, "help") && usage()
-    haskey(opts, "datadir") || usage("Missing --datadir")
 
-    datadir = abspath(expanduser(opts["datadir"]))
-    mkpath(datadir)
+    if haskey(opts, "datadir")
+        manyjulias.datadir = abspath(expanduser(opts["datadir"]))
+    end
 
     workdir = if haskey(opts, "workdir")
         abspath(expanduser(opts["workdir"]))
     else
-        mktempdir()
+        # NOTE: we use /var/tmp because that's less likely to be backed by tmpfs, as per FHS
+        mktempdir("/var/tmp")
     end
     mkpath(workdir)
 
@@ -246,8 +135,8 @@ function main(args; update=true)
     end
 
     # find the latest commit we've already stored; we won't pack anything before that
-    available_commits = Set(union(manyjulias.list(; datadir).loose,
-                                  values(manyjulias.list(; datadir).packed)...))
+    available_commits = Set(union(manyjulias.list().loose,
+                                  values(manyjulias.list().packed)...))
     last_commit = nothing
     for commit in reverse(commits)
         if commit in available_commits
@@ -276,7 +165,7 @@ function main(args; update=true)
             continue
         end
         @info "Creating pack $pack_name: $(length(remaining_commits)) commits to store"
-        pack(pack_name, commit_chunk; workdir, datadir, ntasks)
+        build_pack(pack_name, commit_chunk; workdir, ntasks)
     end
 
     # XXX: remove loose if any loose commit isn't in the set we need
