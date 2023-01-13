@@ -4,35 +4,9 @@ using Pkg
 Pkg.activate(dirname(@__DIR__))
 
 using manyjulias
-using Git, DataStructures, ProgressMeter
+using ProgressMeter
 
-const COMMITS_PER_PACK = 250
-
-# determine the points where Julia versions branched
-function julia_branch_commits()
-    julia = manyjulias.julia_repo()
-
-    commit = "master"
-    branch_commits = Dict{VersionNumber,String}()
-    while !haskey(branch_commits, v"1.6")
-        commit = let
-            blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
-            split(blame)[1]
-        end
-
-        version = VersionNumber(readchomp(`$(git()) -C $julia show $commit:VERSION`))
-
-        version = Base.thisminor(version)
-        @assert !haskey(branch_commits, version)
-        branch_commits[version] = commit
-
-        commit = "$(commit)~"
-    end
-
-    branch_commits
-end
-
-function build_pack(pack_name, commits; workdir, ntasks)
+function build_pack(pack_name, commits; work_dir, ntasks)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(manyjulias.list().loose) do commit
         !(commit in commits)
@@ -53,7 +27,7 @@ function build_pack(pack_name, commits; workdir, ntasks)
         commit in packed_commits && !(commit in loose_commits)
     end
     for commit in required_packed_commits
-        dir = mktempdir(workdir)
+        dir = mktempdir(work_dir)
         manyjulias.extract!(commit, dir)
         manyjulias.store!(commit, dir)
     end
@@ -66,8 +40,8 @@ function build_pack(pack_name, commits; workdir, ntasks)
     @info "Need to build $(length(remaining_commits)) commits to complete pack $pack_name"
     p = Progress(length(remaining_commits); desc="Building pack: ")
     asyncmap(remaining_commits; ntasks) do commit
-        source_dir = mktempdir(workdir)
-        install_dir = mktempdir(workdir)
+        source_dir = mktempdir(work_dir)
+        install_dir = mktempdir(work_dir)
         try
             manyjulias.julia_checkout!(commit, source_dir)
             manyjulias.build!(source_dir, install_dir; nproc=1, echo=(ntasks == 1))
@@ -96,13 +70,18 @@ end
 function usage(error=nothing)
     error !== nothing && println("Error: $error\n")
     println("""
-        Usage: $(basename(@__FILE__)) [options] <commit>
+        Usage: $(basename(@__FILE__)) [options] [release]
+
+        This script generates the manyjulias packs for a given Julia release.
+
+        The positional release argument should be a valid version number that refers to a
+        Julia release (e.g., "1.9"). It defaults to the current development version.
 
         Options:
             --help              Show this help message
-            --workdir           Temporary storage location.
-            --datadir           Where to store the generated packs.
-            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS))""")
+            --work-dir          Temporary storage location.
+            --data-dir          Where to store the generated packs.
+            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).""")
     exit(error === nothing ? 0 : 1)
 end
 
@@ -116,16 +95,16 @@ function main(args; update=true)
         Sys.CPU_THREADS
     end
 
-    workdir = if haskey(opts, "workdir")
-        abspath(expanduser(opts["workdir"]))
+    work_dir = if haskey(opts, "work-dir")
+        abspath(expanduser(opts["work-dir"]))
     else
         # NOTE: we use /var/tmp because that's less likely to be backed by tmpfs, as per FHS
         mktempdir("/var/tmp")
     end
-    mkpath(workdir)
+    mkpath(work_dir)
 
     # determine wheter to start packing, and from which branch to pack commits
-    branch_commits = julia_branch_commits()
+    branch_commits = manyjulias.julia_branch_commits()
     master_branch_version = maximum(keys(branch_commits))
     if isempty(args)
         version = master_branch_version
@@ -134,46 +113,25 @@ function main(args; update=true)
     else
         usage("Too many arguments")
     end
-    start_commit = branch_commits[version]
-    if version == master_branch_version
-        branch = "master"
-    else
-        branch = "release-$(version.major).$(version.minor)"
-    end
-    @info "Packing Julia $version on $branch from commit $start_commit"
+    @info "Packing Julia $version"
 
     # store elfshaker data in a version-specific directory.
     # this simplifies cleanup, and loose pack management.
     data_dir_suffix = "julia-$(version.major).$(version.minor)"
-    if haskey(opts, "datadir")
-        data_dir = abspath(expanduser(opts["datadir"]))
+    if haskey(opts, "data-dir")
+        data_dir = abspath(expanduser(opts["data-dir"]))
         manyjulias.set_data_dir(data_dir; suffix=data_dir_suffix)
     else
         manyjulias.set_data_dir(; suffix=data_dir_suffix)
     end
     @info "Using data directory $(manyjulias.data_dir)"
 
-    # list all commits we care about
-    @info "Listing commits..."
-    julia = manyjulias.julia_repo()
-    commits = let
-        commits = String[]
-        for line in eachline(`$(git()) -C $julia rev-list --reverse --first-parent $(start_commit)\~..$branch`)
-            # NOTE: --first-parent in order to exclude merged commits, because those don't
-            #       have a unique version number (they can alias)
-            push!(commits, line)
-        end
-        commits
-    end
-
-    # group into packs
+    # determine packs we want
     @info "Structuring in packs..."
-    packs = OrderedDict()
-    for commit_chunk in Iterators.partition(commits, COMMITS_PER_PACK)
-        packs[manyjulias.commit_name(julia, first(commit_chunk))] = commit_chunk
-    end
+    packs = manyjulias.julia_commit_packs(version)
 
     # find the latest commit we've already stored; we won't pack anything before that
+    commits = union(values(packs)...)
     available_commits = Set(union(manyjulias.list().loose,
                                   values(manyjulias.list().packed)...))
     last_commit = nothing
@@ -184,7 +142,7 @@ function main(args; update=true)
         end
     end
     if last_commit !== nothing
-        @info "Last stored commit: $last_commit ($(manyjulias.commit_name(julia, last_commit)))"
+        @info "Last stored commit: $last_commit ($(manyjulias.julia_commit_name(last_commit)))"
     end
 
     # create each pack
@@ -204,7 +162,7 @@ function main(args; update=true)
             continue
         end
         @info "Creating pack $pack_name: $(length(remaining_commits)) commits to store"
-        build_pack(pack_name, commit_chunk; workdir, ntasks)
+        build_pack(pack_name, commit_chunk; work_dir, ntasks)
     end
 
     return packs

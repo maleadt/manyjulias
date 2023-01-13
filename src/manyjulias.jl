@@ -16,6 +16,8 @@ function set_data_dir(dir=nothing; suffix=nothing)
     global data_dir
     if dir !== nothing
         data_dir = dir
+    else
+        data_dir = @get_scratch!("data")
     end
     if suffix !== nothing
         data_dir = joinpath(data_dir, suffix)

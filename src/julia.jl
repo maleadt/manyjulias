@@ -1,6 +1,10 @@
 
-const julia_updated = Ref(false)
 const julia_lock = ReentrantLock()
+
+# only ever update the Julia repo once per session
+const julia_updated = Ref(false)
+# but even then only do it if the repo is at least this old
+const MIN_JULIA_REPO_AGE = 300  # 5 minutes
 
 # get an updated Julia (mirror) repository
 function julia_repo()
@@ -10,7 +14,8 @@ function julia_repo()
             if !ispath(joinpath(dir, "config"))
                 @info "Cloning Julia repository..."
                 run(`$(git()) clone --mirror --quiet https://github.com/JuliaLang/julia $dir`)
-            elseif !julia_updated[]
+            elseif !julia_updated[] &&
+                   time() - stat(joinpath(dir, "FETCH_HEAD")).mtime > MIN_JULIA_REPO_AGE
                 @info "Updating Julia repository..."
                 run(`$(git()) -C $dir fetch --quiet --force origin`)
             end
@@ -33,10 +38,20 @@ function julia_checkout!(commit, dir)
 end
 julia_checkout(commit) = julia_checkout!(commit, mktempdir())
 
+# determine the Julia release a commit belongs to.
+# this is determined by looking at the VERSION file, so it only identifies the release.
+function julia_commit_version(commit)
+    julia = julia_repo()
+    return VersionNumber(readchomp(`$(git()) -C $julia show $commit:VERSION`))
+end
+
 # Julia version of contrib/commit-name.sh
-function commit_name(julia, commit)
-    version = readchomp(`$(git()) -C $julia show $commit:VERSION`)
+function julia_commit_name(commit)
+    julia = julia_repo()
+
+    version = julia_commit_version(commit)
     endswith(version, "-DEV") || error("Only commits from the master branch are supported")
+    # XXX: support release branches
 
     branch_commit = let
         blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
@@ -49,8 +64,73 @@ function commit_name(julia, commit)
     end
 
     return "$version.$(commits)"
+end
 
-    return (; version, commits)
+# determine the points where Julia versions branched
+function julia_branch_commits()
+    julia = manyjulias.julia_repo()
+
+    commit = "master"
+    branch_commits = Dict{VersionNumber,String}()
+    while !haskey(branch_commits, v"1.6")
+        commit = let
+            blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
+            split(blame)[1]
+        end
+
+        version = julia_commit_version(commit)
+
+        version = Base.thisminor(version)
+        @assert !haskey(branch_commits, version)
+        branch_commits[version] = commit
+
+        commit = "$(commit)~"
+    end
+
+    branch_commits
+end
+
+# given a version, figure out which branch to look at
+# (e.g. v"1.10" => master, v"1.9" => "release-1.9")
+function julia_branch_name(version)
+    branch_commits = julia_branch_commits()
+    master_branch_version = maximum(keys(branch_commits))
+
+    if version == master_branch_version
+        return "master"
+    else
+        return "release-$(version.major).$(version.minor)"
+    end
+end
+
+# list all the commits that matter for a given Julia version, sorted oldest to newest
+# (i.e., iterating from the branch point to the end of the relevant branch)
+function julia_commits(version)
+    julia = manyjulias.julia_repo()
+
+    branch_commits = julia_branch_commits()
+    start_commit = branch_commits[version]
+    version_branch = julia_branch_name(version)
+
+    commits = String[]
+    for line in eachline(`$(git()) -C $julia rev-list --reverse --first-parent $(start_commit)\~..$version_branch`)
+        # NOTE: --first-parent in order to exclude merged commits, because those don't
+        #       have a unique version number (they can alias)
+        push!(commits, line)
+    end
+    return commits
+end
+
+# list all the commits for a Julia version, grouped in packs named by the first commit,
+# sorted oldest to newest
+function julia_commit_packs(version; packsize=250)
+    commits = julia_commits(version)
+
+    packs = OrderedDict()
+    for commit_chunk in Iterators.partition(commits, packsize)
+        packs[julia_commit_name(first(commit_chunk))] = commit_chunk
+    end
+    return packs
 end
 
 
