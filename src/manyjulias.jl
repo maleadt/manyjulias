@@ -9,10 +9,18 @@ include("elfshaker.jl")
 
 function __init__()
     global download_dir = @get_scratch!("downloads")
+    global data_dir = @get_scratch!("data")
+end
 
-    global datadir = @get_scratch!("data")
-    global elfshaker_dir = joinpath(datadir, "elfshaker")
-    mkpath(elfshaker_dir)
+function set_data_dir(dir=nothing; suffix=nothing)
+    global data_dir
+    if dir !== nothing
+        data_dir = dir
+    end
+    if suffix !== nothing
+        data_dir = joinpath(data_dir, suffix)
+    end
+    mkpath(data_dir)
 end
 
 end # module manyjulias

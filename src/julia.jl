@@ -148,7 +148,7 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
         contrib/fixup-libgfortran.sh /install/lib/julia
         contrib/fixup-libstdc++.sh /install/lib /install/lib/julia
     """
-    with_executor() do exe
+    with_executor(UnprivilegedUserNamespacesExecutor) do exe
         input = Pipe()
         output = Pipe()
 

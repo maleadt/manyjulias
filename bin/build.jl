@@ -7,8 +7,30 @@ using manyjulias
 using Git, DataStructures, ProgressMeter
 
 const COMMITS_PER_PACK = 250
-#const START_COMMIT = "ddf7ce9a595b0c84fbed1a42e8c987a9fdcddaac" # 1.6 branch point
-const START_COMMIT = "7fe6b16f4056906c99cee1ca8bbed08e2c154c1a" # 1.10 branch point
+
+# determine the points where Julia versions branched
+function julia_branch_commits()
+    julia = manyjulias.julia_repo()
+
+    commit = "master"
+    branch_commits = Dict{VersionNumber,String}()
+    while !haskey(branch_commits, v"1.6")
+        commit = let
+            blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
+            split(blame)[1]
+        end
+
+        version = VersionNumber(readchomp(`$(git()) -C $julia show $commit:VERSION`))
+
+        version = Base.thisminor(version)
+        @assert !haskey(branch_commits, version)
+        branch_commits[version] = commit
+
+        commit = "$(commit)~"
+    end
+
+    branch_commits
+end
 
 function build_pack(pack_name, commits; workdir, ntasks)
     # check if we need to clean the slate
@@ -42,19 +64,14 @@ function build_pack(pack_name, commits; workdir, ntasks)
         !(commit in loose_commits)
     end
     @info "Need to build $(length(remaining_commits)) commits to complete pack $pack_name"
-    elfshaker_lock = ReentrantLock()
     p = Progress(length(remaining_commits); desc="Building pack: ")
     asyncmap(remaining_commits; ntasks) do commit
         source_dir = mktempdir(workdir)
         install_dir = mktempdir(workdir)
         try
             manyjulias.julia_checkout!(commit, source_dir)
-            echo = ntasks == 1
-            manyjulias.build!(source_dir, install_dir; nproc=1, echo)
-            exit(1)
-            lock(elfshaker_lock) do
-                manyjulias.store!(commit, install_dir)
-            end
+            manyjulias.build!(source_dir, install_dir; nproc=1, echo=(ntasks == 1))
+            manyjulias.store!(commit, install_dir)
         catch err
             if !isa(err, manyjulias.BuildError)
                 @error "Unexpected error while building $commit" exception=(err, catch_backtrace())
@@ -93,8 +110,10 @@ function main(args; update=true)
     args, opts = manyjulias.parse_args(args)
     haskey(opts, "help") && usage()
 
-    if haskey(opts, "datadir")
-        manyjulias.datadir = abspath(expanduser(opts["datadir"]))
+    ntasks = if haskey(opts, "threads")
+        parse(Int, opts["threads"])
+    else
+        Sys.CPU_THREADS
     end
 
     workdir = if haskey(opts, "workdir")
@@ -105,21 +124,41 @@ function main(args; update=true)
     end
     mkpath(workdir)
 
-    ntasks = if haskey(opts, "threads")
-        parse(Int, opts["threads"])
+    # determine wheter to start packing, and from which branch to pack commits
+    branch_commits = julia_branch_commits()
+    master_branch_version = maximum(keys(branch_commits))
+    if isempty(args)
+        version = master_branch_version
+    elseif length(args) == 1
+        version = VersionNumber(args[1])
     else
-        Sys.CPU_THREADS
+        usage("Too many arguments")
     end
+    start_commit = branch_commits[version]
+    if version == master_branch_version
+        branch = "master"
+    else
+        branch = "release-$(version.major).$(version.minor)"
+    end
+    @info "Packing Julia $version on $branch from commit $start_commit"
 
-    julia = manyjulias.julia_repo()
-
-    global START_COMMIT
+    # store elfshaker data in a version-specific directory.
+    # this simplifies cleanup, and loose pack management.
+    data_dir_suffix = "julia-$(version.major).$(version.minor)"
+    if haskey(opts, "datadir")
+        data_dir = abspath(expanduser(opts["datadir"]))
+        manyjulias.set_data_dir(data_dir; suffix=data_dir_suffix)
+    else
+        manyjulias.set_data_dir(; suffix=data_dir_suffix)
+    end
+    @info "Using data directory $(manyjulias.data_dir)"
 
     # list all commits we care about
     @info "Listing commits..."
+    julia = manyjulias.julia_repo()
     commits = let
         commits = String[]
-        for line in eachline(`$(git()) -C $julia rev-list --reverse --first-parent $(START_COMMIT)\~..master`)
+        for line in eachline(`$(git()) -C $julia rev-list --reverse --first-parent $(start_commit)\~..$branch`)
             # NOTE: --first-parent in order to exclude merged commits, because those don't
             #       have a unique version number (they can alias)
             push!(commits, line)
@@ -167,8 +206,6 @@ function main(args; update=true)
         @info "Creating pack $pack_name: $(length(remaining_commits)) commits to store"
         build_pack(pack_name, commit_chunk; workdir, ntasks)
     end
-
-    # XXX: remove loose if any loose commit isn't in the set we need
 
     return packs
 
