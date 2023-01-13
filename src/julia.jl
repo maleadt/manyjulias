@@ -68,9 +68,50 @@ function populate_srccache!(source_dir)
 
     repo_srccache = joinpath(source_dir, "deps", "srccache")
     lock(srccache_lock) do
+        # get existing
         cp(srccache, repo_srccache)
-        run(ignorestatus(setenv(`make -C deps getall NO_GIT=1`; dir=source_dir)),
-            devnull, devnull, devnull)
+
+        # download new
+        rootfs = lock(artifact_lock) do
+            artifact"package_linux"
+        end
+        config = SandboxConfig(
+            Dict("/"        => rootfs),
+            Dict("/source"  => source_dir);
+            uid=1000, gid=1000, pwd="/source"
+        )
+        with_executor(UnprivilegedUserNamespacesExecutor) do exe
+            input = Pipe()
+            output = Pipe()
+
+            cmd = Sandbox.build_executor_command(exe, config, `/bin/bash -l`)
+            cmd = pipeline(cmd; stdin=input, stdout=output, stderr=output)
+            proc = run(cmd; wait=false)
+
+            println(input, """
+                set -ue
+
+                # Julia 1.6 requires a functional gfortran, but only for triple detection
+                echo 'echo "GNU Fortran (GCC) 9.0.0"' > /usr/local/bin/gfortran
+                chmod +x /usr/local/bin/gfortran
+
+                make -C deps getall NO_GIT=1""")
+            close(input)
+
+            # collect output
+            close(output.in)
+            log_monitor = @async String(read(output))
+
+            wait(proc)
+            close(output)
+            log = fetch(log_monitor)
+
+            if !success(proc)
+                @warn "Failed to populate srccache:\n$log"
+            end
+        end
+
+        # sync back
         for file in readdir(repo_srccache)
             if !ispath(joinpath(srccache, file))
                 cp(joinpath(repo_srccache, file), joinpath(srccache, file))
@@ -98,12 +139,7 @@ end
 # build a Julia source tree and install it
 const artifact_lock = ReentrantLock()   # to prevent concurrent downloads
 function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
-    # pre-populate the srccache
-    try
-        populate_srccache!(source_dir)
-    catch err
-        @warn "Failed to populate srccache" exception=(err, catch_backtrace())
-    end
+    populate_srccache!(source_dir)
 
     # define a Make.user
     open("$source_dir/Make.user", "w") do io
@@ -126,28 +162,8 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
         Dict("/source"  => source_dir,
              "/install" => install_dir),
         Dict("nproc"    => string(nproc));
-        uid=1000, gid=1000
+        uid=1000, gid=1000, pwd="/source"
     )
-    script = raw"""
-        set -ue
-        cd /source
-
-        # Julia 1.6 requires a functional gfortran, but only for triple detection
-        echo 'echo "GNU Fortran (GCC) 9.0.0"' > /usr/local/bin/gfortran
-        chmod +x /usr/local/bin/gfortran
-
-        # old releases somtimes contain bad checksums; ignore those
-        sed -i 's/exit 2$/exit 0/g' deps/tools/jlchecksum
-
-        # prevent building docs
-        echo "default:" > doc/Makefile
-        mkdir -p doc/_build/html
-
-        make -j${nproc} install
-
-        contrib/fixup-libgfortran.sh /install/lib/julia
-        contrib/fixup-libstdc++.sh /install/lib /install/lib/julia
-    """
     with_executor(UnprivilegedUserNamespacesExecutor) do exe
         input = Pipe()
         output = Pipe()
@@ -155,12 +171,29 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
         cmd = Sandbox.build_executor_command(exe, config, `/bin/bash -l`)
         cmd = pipeline(cmd; stdin=input, stdout=output, stderr=output)
         proc = run(cmd; wait=false)
-        close(output.in)
 
-        println(input, script)
+        println(input, raw"""
+            set -ue
+
+            # Julia 1.6 requires a functional gfortran, but only for triple detection
+            echo 'echo "GNU Fortran (GCC) 9.0.0"' > /usr/local/bin/gfortran
+            chmod +x /usr/local/bin/gfortran
+
+            # old releases somtimes contain bad checksums; ignore those
+            sed -i 's/exit 2$/exit 0/g' deps/tools/jlchecksum
+
+            # prevent building docs
+            echo "default:" > doc/Makefile
+            mkdir -p doc/_build/html
+
+            make -j${nproc} install
+
+            contrib/fixup-libgfortran.sh /install/lib/julia
+            contrib/fixup-libstdc++.sh /install/lib /install/lib/julia""")
         close(input)
 
         # collect output
+        close(output.in)
         log_monitor = @async begin
             io = IOBuffer()
             while !eof(output)
