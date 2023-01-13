@@ -168,10 +168,6 @@ function main(args; update=true)
         end
     end
 
-    # TODO: don't finalize the last pack, so that we can cheaply add more commits later
-
-    return packs
-
     return
 end
 
