@@ -6,7 +6,7 @@ Pkg.activate(dirname(@__DIR__))
 using manyjulias
 using ProgressMeter
 
-function build_pack(pack_name, commits; work_dir, ntasks)
+function build_pack(commits; work_dir, ntasks)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(manyjulias.list().loose) do commit
         !(commit in commits)
@@ -37,8 +37,7 @@ function build_pack(pack_name, commits; work_dir, ntasks)
     remaining_commits = filter(commits) do commit
         !(commit in loose_commits)
     end
-    @info "Need to build $(length(remaining_commits)) commits to complete pack $pack_name"
-    p = Progress(length(remaining_commits); desc="Building pack: ")
+    p = Progress(length(commits); desc="Building pack: ", start=length(loose_commits))
     asyncmap(remaining_commits; ntasks) do commit
         source_dir = mktempdir(work_dir)
         install_dir = mktempdir(work_dir)
@@ -60,11 +59,6 @@ function build_pack(pack_name, commits; work_dir, ntasks)
             next!(p)
         end
     end
-
-    # pack everything and clean up
-    @info "Packing $pack_name"
-    manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"))
-    manyjulias.rm_loose()
 end
 
 function usage(error=nothing)
@@ -131,6 +125,7 @@ function main(args; update=true)
     packs = manyjulias.julia_commit_packs(version)
 
     # find the latest commit we've already stored; we won't pack anything before that
+    # so that we avoid discarding loose commits from the final (uncomplete) pack.
     commits = union(values(packs)...)
     available_commits = Set(union(manyjulias.list().loose,
                                   values(manyjulias.list().packed)...))
@@ -146,8 +141,7 @@ function main(args; update=true)
     end
 
     # create each pack
-    @info "Creating $(length(packs)) packs..."
-    for (pack_name, commit_chunk) in packs
+    for (i, (pack_name, commit_chunk)) in enumerate(packs)
         remaining_commits = if last_commit === nothing
             commit_chunk
         else
@@ -157,12 +151,20 @@ function main(args; update=true)
                 commit_idx > last_commit_idx
             end
         end
+
         if isempty(remaining_commits)
             @info "Skipping pack $pack_name"
             continue
         end
-        @info "Creating pack $pack_name: $(length(remaining_commits)) commits to store"
-        build_pack(pack_name, commit_chunk; work_dir, ntasks)
+        @info "Creating pack $i/$(length(packs)): $pack_name, containing $(length(remaining_commits)) commits"
+        build_pack(commit_chunk; work_dir, ntasks)
+
+        # if the pack is complete, finalize it
+        if i !== lastindex(packs)
+            @info "Closing $pack_name"
+            manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"))
+            manyjulias.rm_loose()
+        end
     end
 
     # TODO: don't finalize the last pack, so that we can cheaply add more commits later
