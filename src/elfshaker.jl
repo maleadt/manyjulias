@@ -128,3 +128,31 @@ function unprepare(dir)
 
     rm(metadata_file)
 end
+
+# version of extract! that does not mutate the data dir (e.g., for use on shared servers)
+function extract_readonly!(commit, dir)
+    # as elfshaker doesn't have an option to write loose directories outside of the data dir
+    # we use a container with an overlay filesystem to avoid modifications.
+
+    rootfs = lock(artifact_lock) do
+        artifact"package_linux"
+    end
+    workdir = mktempdir()
+    sandbox_cmd =
+        sandbox(`/elfshaker/bin/elfshaker extract --data-dir /data_dir --reset $commit`;
+                rootfs, workdir, uid=1000, gid=1000, cwd="/target_dir",
+                mounts=Dict(
+                    "/elfshaker:ro" => elfshaker_jll.artifact_dir,
+                    "/data_dir"     => data_dir,
+                    "target_dir:rw" => dir))
+    try
+        run(sandbox_cmd)
+    finally
+        if VERSION < v"1.9-"    # JuliaLang/julia#47650
+            chmod_recursive(workdir, 0o777)
+        end
+        rm(workdir; recursive=true)
+    end
+    unprepare(dir)
+    return dir
+end

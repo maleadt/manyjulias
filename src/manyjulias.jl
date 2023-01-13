@@ -1,11 +1,12 @@
 module manyjulias
 
-using Scratch, Git, TOML, DataStructures, ProgressMeter, Sandbox, LazyArtifacts
-using elfshaker_jll
+using Scratch, Git, TOML, DataStructures, ProgressMeter, LazyArtifacts, JSON3, Random
+using elfshaker_jll, crun_jll
 
 include("utils.jl")
 include("julia.jl")
 include("elfshaker.jl")
+include("sandbox.jl")
 
 function __init__()
     global download_dir = @get_scratch!("downloads")

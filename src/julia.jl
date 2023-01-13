@@ -50,8 +50,6 @@ function julia_commit_name(commit)
     julia = julia_repo()
 
     version = julia_commit_version(commit)
-    endswith(version, "-DEV") || error("Only commits from the master branch are supported")
-    # XXX: support release branches
 
     branch_commit = let
         blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
@@ -155,17 +153,15 @@ function populate_srccache!(source_dir)
         rootfs = lock(artifact_lock) do
             artifact"package_linux"
         end
-        config = SandboxConfig(
-            Dict("/"        => rootfs),
-            Dict("/source"  => source_dir);
-            uid=1000, gid=1000, pwd="/source"
-        )
-        with_executor(UnprivilegedUserNamespacesExecutor) do exe
+        workdir = mktempdir()
+        sandbox_cmd = sandbox(`/bin/bash -l`; workdir, rootfs,
+                              mounts=Dict("/source:rw" => source_dir),
+                              uid=1000, gid=1000, cwd="/source")
+        try
             input = Pipe()
             output = Pipe()
 
-            cmd = Sandbox.build_executor_command(exe, config, `/bin/bash -l`)
-            cmd = pipeline(cmd; stdin=input, stdout=output, stderr=output)
+            cmd = pipeline(sandbox_cmd; stdin=input, stdout=output, stderr=output)
             proc = run(cmd; wait=false)
 
             println(input, """
@@ -189,6 +185,11 @@ function populate_srccache!(source_dir)
             if !success(proc)
                 @warn "Failed to populate srccache:\n$log"
             end
+        finally
+            if VERSION < v"1.9-"    # JuliaLang/julia#47650
+                chmod_recursive(workdir, 0o777)
+            end
+            rm(workdir; recursive=true)
         end
 
         # sync back
@@ -235,21 +236,17 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
     rootfs = lock(artifact_lock) do
         artifact"package_linux"
     end
-    config = SandboxConfig(
-        # ro
-        Dict("/"        => rootfs),
-        # rw
-        Dict("/source"  => source_dir,
-             "/install" => install_dir),
-        Dict("nproc"    => string(nproc));
-        uid=1000, gid=1000, pwd="/source"
-    )
-    with_executor(UnprivilegedUserNamespacesExecutor) do exe
+    workdir = mktempdir()
+    sandbox_cmd = sandbox(`/bin/bash -l`; workdir, rootfs,
+                          mounts=Dict("/source:rw" => source_dir,
+                                      "/install:rw" => install_dir),
+                          env=Dict("nproc" => string(nproc)),
+                          uid=1000, gid=1000, cwd="/source")
+    try
         input = Pipe()
         output = Pipe()
 
-        cmd = Sandbox.build_executor_command(exe, config, `/bin/bash -l`)
-        cmd = pipeline(cmd; stdin=input, stdout=output, stderr=output)
+        cmd = pipeline(sandbox_cmd; stdin=input, stdout=output, stderr=output)
         proc = run(cmd; wait=false)
 
         println(input, raw"""
@@ -291,6 +288,11 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
         if !success(proc)
             throw(BuildError(log))
         end
+    finally
+        if VERSION < v"1.9-"    # JuliaLang/julia#47650
+            chmod_recursive(workdir, 0o777)
+        end
+        rm(workdir; recursive=true)
     end
 
     # remove some useless stuff

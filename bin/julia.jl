@@ -68,6 +68,8 @@ function main(all_args)
         error("Commit $commit is not available in any pack. Run `manyjulias/bin/build.jl $(version.major).$(version.minor)` to generate it.")
     end
 
+    # TODO: we should not mutate the data store, but extract into a temporary directory.
+
     # if the commit is not available as a loose pack, we need to extract it from a pack.
     loose_commits = manyjulias.list().loose
     if commit ∉ loose_commits
@@ -78,20 +80,14 @@ function main(all_args)
         end
     end
 
-    # now extract the commit (from a pack, or just the loose pack) and launch it
-    if commit in loose_commits
-        return launch_loose(commit, child_args)
-    end
-
-    # otherwise we first need to extract it from a pack
-
+    launch(commit, child_args)
 end
 
-function launch_loose(commit, child_args)
+function launch(commit, child_args)
     dir = mktempdir()
 
     proc = try
-        manyjulias.extract!(commit, dir)
+        manyjulias.extract_readonly!(commit, dir)
 
         cmd = ignorestatus(`$(joinpath(dir, "bin", "julia")) $(child_args...)`)
         run(cmd)
