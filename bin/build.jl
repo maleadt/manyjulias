@@ -6,10 +6,10 @@ Pkg.activate(dirname(@__DIR__))
 using manyjulias
 using ProgressMeter
 
-function build_pack(commits; work_dir, ntasks)
+function build_pack(commits_to_pack, commits_to_build; work_dir, ntasks)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(manyjulias.list().loose) do commit
-        !(commit in commits)
+        !(commit in commits_to_pack)
     end
     if !isempty(unrelated_loose_commits)
         @info "Unrelated loose commits detected; removing"
@@ -23,7 +23,7 @@ function build_pack(commits; work_dir, ntasks)
     # re-extract any packed commits we'll need again
     packs = manyjulias.list().packed
     packed_commits = isempty(packs) ? [] : union(values(packs)...)
-    required_packed_commits = filter(commits) do commit
+    required_packed_commits = filter(commits_to_pack) do commit
         commit in packed_commits && !(commit in loose_commits)
     end
     for commit in required_packed_commits
@@ -34,13 +34,12 @@ function build_pack(commits; work_dir, ntasks)
     loose_commits = manyjulias.list().loose
 
     # the remaining commits need to be built
-    remaining_commits = filter(commits) do commit
-        !(commit in loose_commits)
-    end
-    p = Progress(length(commits); desc="Building pack: ", start=length(loose_commits))
-    asyncmap(remaining_commits; ntasks) do commit
+    p = Progress(length(commits_to_pack); desc="Building pack: ",
+                 start=length(commits_to_pack) - length(commits_to_build))
+    asyncmap(commits_to_build; ntasks) do commit
         source_dir = mktempdir(work_dir)
         install_dir = mktempdir(work_dir)
+
         try
             manyjulias.julia_checkout!(commit, source_dir)
             manyjulias.build!(source_dir, install_dir; nproc=1, echo=(ntasks == 1))
@@ -141,6 +140,7 @@ function main(args; update=true)
     end
 
     # create each pack
+    existing_packs = manyjulias.list().packed
     for (i, (pack_name, commit_chunk)) in enumerate(packs)
         remaining_commits = if last_commit === nothing
             commit_chunk
@@ -153,13 +153,14 @@ function main(args; update=true)
         end
 
         if isempty(remaining_commits)
-            @info "Skipping pack $pack_name"
+            existing_pack = get(existing_packs, manyjulias.safe_name("julia-$(pack_name)"), [])
+            @info "Pack $i/$(length(packs)) ($pack_name): already processed, $(length(existing_pack))/$(length(commit_chunk)) commits built"
             continue
         end
-        @info "Creating pack $i/$(length(packs)): $pack_name, containing $(length(remaining_commits)) commits"
-        build_pack(commit_chunk; work_dir, ntasks)
+        @info "Pack $i/$(length(packs)) ($pack_name): building $(length(remaining_commits)) commits"
+        build_pack(commit_chunk, remaining_commits; work_dir, ntasks)
 
-        # if the pack is complete, finalize it
+        # close all but the final pack
         if i !== lastindex(packs)
             @info "Closing $pack_name"
             manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"))
