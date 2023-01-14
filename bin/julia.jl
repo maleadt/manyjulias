@@ -12,14 +12,13 @@ function usage(error=nothing)
     println("""
         Usage: $(basename(@__FILE__)) [options] [commit] [julia args]
 
-        This script extracts and launches Julia from a given commit.
+        This script launches Julia from a given commit, if available in a pack.
 
         The first positional argument determines which commit of Julia to launch.
         Any remaining arguments are passed to the launched Julia process.
 
         Options:
-            --help              Show this help message
-            --data-dir          Where to store the generated packs.""")
+            --help              Show this help message.""")
     exit(error === nothing ? 0 : 1)
 end
 
@@ -51,27 +50,17 @@ function main(all_args)
     end
     commit = args[1]
     version = manyjulias.julia_commit_version(commit)
-
-    # determine the data directory
-    data_dir_suffix = "julia-$(version.major).$(version.minor)"
-    if haskey(opts, "datadir")
-        data_dir = abspath(expanduser(opts["datadir"]))
-        manyjulias.set_data_dir(data_dir; suffix=data_dir_suffix)
-    else
-        manyjulias.set_data_dir(; suffix=data_dir_suffix)
-    end
+    db = "julia-$(version.major).$(version.minor)"
 
     # check if we have this commit
-    available_commits = Set(union(manyjulias.list().loose,
-                                  values(manyjulias.list().packed)...))
+    available_commits = Set(union(manyjulias.list(db).loose,
+                                  values(manyjulias.list(db).packed)...))
     if commit ∉ available_commits
         error("Commit $commit is not available in any pack. Run `manyjulias/bin/build.jl $(version.major).$(version.minor)` to generate it.")
     end
 
-    # TODO: we should not mutate the data store, but extract into a temporary directory.
-
     # if the commit is not available as a loose pack, we need to extract it from a pack.
-    loose_commits = manyjulias.list().loose
+    loose_commits = manyjulias.list(db).loose
     if commit ∉ loose_commits
         # we'll need to extract it from a pack,
         # so make sure the datadir doesn't grow too large
@@ -80,14 +69,14 @@ function main(all_args)
         end
     end
 
-    launch(commit, child_args)
+    launch(commit, child_args; db)
 end
 
-function launch(commit, child_args)
+function launch(commit, child_args; db)
     dir = mktempdir()
 
     proc = try
-        manyjulias.extract_readonly!(commit, dir)
+        manyjulias.extract_readonly!(db, commit, dir)
 
         cmd = ignorestatus(`$(joinpath(dir, "bin", "julia")) $(child_args...)`)
         run(cmd)

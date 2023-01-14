@@ -1,8 +1,12 @@
-function elfshaker_cmd(args; dir=nothing)
+function elfshaker_cmd(db::String, args; dir=nothing)
+    # we maintain multiple elfshaker databases, one for each Julia version.
+    db_data_dir = joinpath(data_dir, db)
+    mkpath(db_data_dir)
+
     if dir === nothing
-        `$(elfshaker()) --data-dir $(data_dir) $args`
+        `$(elfshaker()) --data-dir $db_data_dir $args`
     else
-        setenv(`$(elfshaker()) --data-dir $(data_dir) $args`; dir)
+        setenv(`$(elfshaker()) --data-dir $db_data_dir $args`; dir)
     end
 end
 
@@ -11,12 +15,12 @@ end
 
 elfshaker_lock = ReentrantLock()
 
-function list()
+function list(db::String)
     loose = String[]
     packed = Dict{String,Vector{String}}()
 
     lock(elfshaker_lock) do
-        for line in eachline(elfshaker_cmd(`list`))
+        for line in eachline(elfshaker_cmd(db, `list`))
             m = match(r"^loose/(.+):\1$", line)
             if m !== nothing
                 commit = m.captures[1]
@@ -39,33 +43,33 @@ function list()
     return (; loose, packed)
 end
 
-function store!(commit, dir)
+function store!(db::String, commit, dir)
     prepare(dir)
     lock(elfshaker_lock) do
-        run(elfshaker_cmd(`store $commit`; dir))
+        run(elfshaker_cmd(db, `store $commit`; dir))
     end
     rm(dir; recursive=true)
 end
 
-function extract!(commit, dir)
+function extract!(db::String, commit, dir)
     lock(elfshaker_lock) do
-        run(elfshaker_cmd(`extract --reset $commit`; dir))
+        run(elfshaker_cmd(db, `extract --reset $commit`; dir))
     end
     unprepare(dir)
     return dir
 end
 
 # remove all loose packs
-function rm_loose()
+function rm_loose(db::String)
     lock(elfshaker_lock) do
-        rm(joinpath(data_dir, "loose"); recursive=true, force=true)
-        rm(joinpath(data_dir, "packs", "loose"); recursive=true, force=true)
+        rm(joinpath(data_dir, db, "loose"); recursive=true, force=true)
+        rm(joinpath(data_dir, db, "packs", "loose"); recursive=true, force=true)
     end
 end
 
-function pack(name)
+function pack(db::String, name)
     lock(elfshaker_lock) do
-        run(elfshaker_cmd(`pack $name`))
+        run(elfshaker_cmd(db, `pack $name`))
     end
 end
 
@@ -130,7 +134,7 @@ function unprepare(dir)
 end
 
 # version of extract! that does not mutate the data dir (e.g., for use on shared servers)
-function extract_readonly!(commit, dir)
+function extract_readonly!(db::String, commit, dir)
     # as elfshaker doesn't have an option to write loose directories outside of the data dir
     # we use a container with an overlay filesystem to avoid modifications.
 
@@ -142,9 +146,9 @@ function extract_readonly!(commit, dir)
         sandbox(`/elfshaker/bin/elfshaker extract --data-dir /data_dir --reset $commit`;
                 rootfs, workdir, uid=1000, gid=1000, cwd="/target_dir",
                 mounts=Dict(
-                    "/elfshaker:ro" => elfshaker_jll.artifact_dir,
-                    "/data_dir"     => data_dir,
-                    "target_dir:rw" => dir))
+                    "/elfshaker:ro"     => elfshaker_jll.artifact_dir,
+                    "/data_dir"         => joinpath(data_dir, db),
+                    "/target_dir:rw"    => dir))
     try
         run(sandbox_cmd)
     finally

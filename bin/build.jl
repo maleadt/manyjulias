@@ -6,9 +6,9 @@ Pkg.activate(dirname(@__DIR__))
 using manyjulias
 using ProgressMeter
 
-function build_pack(commits_to_pack, commits_to_build; work_dir, ntasks)
+function build_pack(commits_to_pack, commits_to_build; work_dir, ntasks, db)
     # check if we need to clean the slate
-    unrelated_loose_commits = filter(manyjulias.list().loose) do commit
+    unrelated_loose_commits = filter(manyjulias.list(db).loose) do commit
         !(commit in commits_to_pack)
     end
     if !isempty(unrelated_loose_commits)
@@ -18,20 +18,20 @@ function build_pack(commits_to_pack, commits_to_build; work_dir, ntasks)
         #      loose commits, as there's both the indices and the actual objects.
         #      elfshaker gc would help here (elfshaker/elfshaker#97)
     end
-    loose_commits = manyjulias.list().loose
+    loose_commits = manyjulias.list(db).loose
 
     # re-extract any packed commits we'll need again
-    packs = manyjulias.list().packed
+    packs = manyjulias.list(db).packed
     packed_commits = isempty(packs) ? [] : union(values(packs)...)
     required_packed_commits = filter(commits_to_pack) do commit
         commit in packed_commits && !(commit in loose_commits)
     end
     for commit in required_packed_commits
         dir = mktempdir(work_dir)
-        manyjulias.extract!(commit, dir)
-        manyjulias.store!(commit, dir)
+        manyjulias.extract!(db, commit, dir)
+        manyjulias.store!(db, commit, dir)
     end
-    loose_commits = manyjulias.list().loose
+    loose_commits = manyjulias.list(db).loose
 
     # the remaining commits need to be built
     p = Progress(length(commits_to_pack); desc="Building pack: ",
@@ -43,7 +43,7 @@ function build_pack(commits_to_pack, commits_to_build; work_dir, ntasks)
         try
             manyjulias.julia_checkout!(commit, source_dir)
             manyjulias.build!(source_dir, install_dir; nproc=1, echo=(ntasks == 1))
-            manyjulias.store!(commit, install_dir)
+            manyjulias.store!(db, commit, install_dir)
         catch err
             if !isa(err, manyjulias.BuildError)
                 @error "Unexpected error while building $commit" exception=(err, catch_backtrace())
@@ -73,7 +73,6 @@ function usage(error=nothing)
         Options:
             --help              Show this help message
             --work-dir          Temporary storage location.
-            --data-dir          Where to store the generated packs.
             --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).""")
     exit(error === nothing ? 0 : 1)
 end
@@ -107,17 +106,7 @@ function main(args; update=true)
         usage("Too many arguments")
     end
     @info "Packing Julia $version"
-
-    # store elfshaker data in a version-specific directory.
-    # this simplifies cleanup, and loose pack management.
-    data_dir_suffix = "julia-$(version.major).$(version.minor)"
-    if haskey(opts, "data-dir")
-        data_dir = abspath(expanduser(opts["data-dir"]))
-        manyjulias.set_data_dir(data_dir; suffix=data_dir_suffix)
-    else
-        manyjulias.set_data_dir(; suffix=data_dir_suffix)
-    end
-    @info "Using data directory $(manyjulias.data_dir)"
+    db = "julia-$(version.major).$(version.minor)"
 
     # determine packs we want
     @info "Structuring in packs..."
@@ -126,8 +115,8 @@ function main(args; update=true)
     # find the latest commit we've already stored; we won't pack anything before that
     # so that we avoid discarding loose commits from the final (uncomplete) pack.
     commits = union(values(packs)...)
-    available_commits = Set(union(manyjulias.list().loose,
-                                  values(manyjulias.list().packed)...))
+    available_commits = Set(union(manyjulias.list(db).loose,
+                                  values(manyjulias.list(db).packed)...))
     last_commit = nothing
     for commit in reverse(commits)
         if commit in available_commits
@@ -140,8 +129,9 @@ function main(args; update=true)
     end
 
     # create each pack
-    existing_packs = manyjulias.list().packed
+    existing_packs = manyjulias.list(db).packed
     for (i, (pack_name, commit_chunk)) in enumerate(packs)
+        safe_pack_name = manyjulias.safe_name("julia-$(pack_name)")
         remaining_commits = if last_commit === nothing
             commit_chunk
         else
@@ -153,18 +143,18 @@ function main(args; update=true)
         end
 
         if isempty(remaining_commits)
-            existing_pack = get(existing_packs, manyjulias.safe_name("julia-$(pack_name)"), [])
+            existing_pack = get(existing_packs, safe_pack_name, [])
             @info "Pack $i/$(length(packs)) ($pack_name): already processed, $(length(existing_pack))/$(length(commit_chunk)) commits built"
             continue
         end
         @info "Pack $i/$(length(packs)) ($pack_name): building $(length(remaining_commits)) commits"
-        build_pack(commit_chunk, remaining_commits; work_dir, ntasks)
+        build_pack(commit_chunk, remaining_commits; work_dir, ntasks, db)
 
         # close all but the final pack
         if i !== length(packs)
             @info "Closing $pack_name"
-            manyjulias.pack(manyjulias.safe_name("julia-$(pack_name)"))
-            manyjulias.rm_loose()
+            manyjulias.pack(db, safe_pack_name)
+            manyjulias.rm_loose(db)
         end
     end
 
