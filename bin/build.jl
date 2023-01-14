@@ -32,7 +32,6 @@ function build_pack(commits_to_pack, commits_to_build;
         manyjulias.extract!(db, commit, dir)
         manyjulias.store!(db, commit, dir)
     end
-    loose_commits = manyjulias.list(db).loose
 
     # the remaining commits need to be built
     p = Progress(length(commits_to_pack); desc="Building pack: ",
@@ -99,6 +98,7 @@ function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
         end
 
         if isempty(remaining_commits)
+            # FIXME: length(existing_pack) does not include loose commits
             existing_pack = get(existing_packs, safe_pack_name, [])
             @info "Pack $i/$(length(packs)) ($pack_name): already processed, $(length(existing_pack))/$(length(commit_chunk)) commits built"
             continue
