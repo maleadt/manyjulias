@@ -59,16 +59,6 @@ function main(all_args)
         error("Commit $commit is not available in any pack. Run `manyjulias/bin/build.jl $(version.major).$(version.minor)` to generate it.")
     end
 
-    # if the commit is not available as a loose pack, we need to extract it from a pack.
-    loose_commits = manyjulias.list(db).loose
-    if commit ∉ loose_commits
-        # we'll need to extract it from a pack,
-        # so make sure the datadir doesn't grow too large
-        if length(loose_commits) > MAX_LOOSE_COMMITS
-            manyjulias.rm_loose()
-        end
-    end
-
     launch(commit, child_args; db)
 end
 
