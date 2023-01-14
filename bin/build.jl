@@ -6,7 +6,8 @@ Pkg.activate(dirname(@__DIR__))
 using manyjulias
 using ProgressMeter
 
-function build_pack(commits_to_pack, commits_to_build; work_dir, ntasks, db)
+function build_pack(commits_to_pack, commits_to_build;
+                    work_dir::String, ntasks::Int, db::String)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(manyjulias.list(db).loose) do commit
         !(commit in commits_to_pack)
@@ -60,56 +61,11 @@ function build_pack(commits_to_pack, commits_to_build; work_dir, ntasks, db)
     end
 end
 
-function usage(error=nothing)
-    error !== nothing && println("Error: $error\n")
-    println("""
-        Usage: $(basename(@__FILE__)) [options] [release]
-
-        This script generates the manyjulias packs for a given Julia release.
-
-        The positional release argument should be a valid version number that refers to a
-        Julia release (e.g., "1.9"). It defaults to the current development version.
-
-        Options:
-            --help              Show this help message
-            --work-dir          Temporary storage location.
-            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).""")
-    exit(error === nothing ? 0 : 1)
-end
-
-function main(args; update=true)
-    args, opts = manyjulias.parse_args(args)
-    haskey(opts, "help") && usage()
-
-    ntasks = if haskey(opts, "threads")
-        parse(Int, opts["threads"])
-    else
-        Sys.CPU_THREADS
-    end
-
-    work_dir = if haskey(opts, "work-dir")
-        abspath(expanduser(opts["work-dir"]))
-    else
-        # NOTE: we use /var/tmp because that's less likely to be backed by tmpfs, as per FHS
-        mktempdir("/var/tmp")
-    end
-    mkpath(work_dir)
-
-    # determine wheter to start packing, and from which branch to pack commits
-    branch_commits = manyjulias.julia_branch_commits()
-    master_branch_version = maximum(keys(branch_commits))
-    if isempty(args)
-        version = master_branch_version
-    elseif length(args) == 1
-        version = VersionNumber(args[1])
-    else
-        usage("Too many arguments")
-    end
-    @info "Packing Julia $version"
+function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
+    @info "Building packs for Julia $version"
     db = "julia-$(version.major).$(version.minor)"
 
     # determine packs we want
-    @info "Structuring in packs..."
     packs = manyjulias.julia_commit_packs(version)
 
     # find the latest commit we've already stored; we won't pack anything before that
@@ -156,6 +112,53 @@ function main(args; update=true)
             manyjulias.pack(db, safe_pack_name)
             manyjulias.rm_loose(db)
         end
+    end
+end
+
+function usage(error=nothing)
+    error !== nothing && println("Error: $error\n")
+    println("""
+        Usage: $(basename(@__FILE__)) [options] [releases]
+
+        This script generates the manyjulias packs for given Julia releases.
+
+        The positional release arguments should be valid version numbers that refer to a
+        Julia release (e.g., "1.9"). It defaults to the current development version.
+
+        Options:
+            --help              Show this help message
+            --work-dir          Temporary storage location.
+            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).""")
+    exit(error === nothing ? 0 : 1)
+end
+
+function main(args; update=true)
+    args, opts = manyjulias.parse_args(args)
+    haskey(opts, "help") && usage()
+
+    ntasks = if haskey(opts, "threads")
+        parse(Int, opts["threads"])
+    else
+        Sys.CPU_THREADS
+    end
+
+    work_dir = if haskey(opts, "work-dir")
+        abspath(expanduser(opts["work-dir"]))
+    else
+        # NOTE: we use /var/tmp because that's less likely to be backed by tmpfs, as per FHS
+        mktempdir("/var/tmp")
+    end
+    mkpath(work_dir)
+
+    # determine which versions to build
+    versions = VersionNumber.(args)
+    if isempty(versions)
+        branch_commits = manyjulias.julia_branch_commits()
+        versions = [maximum(keys(branch_commits))]
+    end
+
+    for version in versions
+        build_version(version; work_dir, ntasks)
     end
 
     return
