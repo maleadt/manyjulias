@@ -222,7 +222,8 @@ end
 
 # build a Julia source tree and install it
 const artifact_lock = ReentrantLock()   # to prevent concurrent downloads
-function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
+function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
+                timeout::Int=3600)
     populate_srccache!(source_dir)
 
     # define a Make.user
@@ -240,7 +241,8 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
         artifact"package_linux"
     end
     workdir = mktempdir()
-    sandbox_cmd = sandbox(`/bin/bash -l`; workdir, rootfs,
+    name = randstring()
+    sandbox_cmd = sandbox(`/bin/bash -l`; name, workdir, rootfs,
                           mounts=Dict("/source:rw" => source_dir,
                                       "/install:rw" => install_dir),
                           env=Dict("nproc" => string(nproc)),
@@ -284,8 +286,21 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true)
             return String(take!(io))
         end
 
+        # watch for timeouts
+        timeout_monitor = Timer(timeout) do timer
+            process_running(proc) || return
+            # TODO: why doesn't `crun kill --all` work?
+            recursive_kill(proc, Base.SIGTERM)
+            t = Timer(10) do timer
+                recursive_kill(proc, Base.SIGKILL)
+            end
+            wait(proc)
+            close(t)
+        end
+
         wait(proc)
         close(output)
+        close(timeout_monitor)
         log = fetch(log_monitor)
 
         if !success(proc)
