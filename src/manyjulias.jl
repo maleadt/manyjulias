@@ -16,6 +16,8 @@ function __init__()
     else
         @get_scratch!("data")
     end
+
+    global sandbox_dir = mktempdir()
 end
 
 function set_data_dir(dir::String)

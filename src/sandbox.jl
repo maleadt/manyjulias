@@ -175,5 +175,5 @@ function sandbox(cmd; rootfs::String,
         JSON3.write(io, sandbox_config)
     end
 
-    `$(crun()) run --bundle $bundle_path $(sandbox.name)`
+    `$(crun()) --root $(sandbox_dir) run --bundle $bundle_path $(sandbox.name)`
 end
