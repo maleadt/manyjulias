@@ -128,8 +128,8 @@ end
 
 abs2rel(path) = path[1] == '/' ? path[2:end] : path
 
-function sandbox(cmd; rootfs::String,
-                      workdir::String,
+function sandbox(cmd; workdir::String,
+                      rootfs::String=artifact"debian_minimal",
                       name::String=randstring(),
                       mounts::Dict{String,String}=Dict{String,String}(),
                       env::Dict{String,String}=Dict{String,String}(),

@@ -151,13 +151,10 @@ function extract_readonly!(db::String, commit, dir)
     # as elfshaker doesn't have an option to write loose directories outside of the data dir
     # we use a container with an overlay filesystem to avoid modifications.
 
-    rootfs = lock(artifact_lock) do
-        artifact"package_linux"
-    end
     workdir = mktempdir()
     sandbox_cmd =
         sandbox(`/elfshaker/bin/elfshaker extract --data-dir /data_dir --reset $commit`;
-                rootfs, workdir, uid=1000, gid=1000, cwd="/target_dir",
+                workdir, uid=1000, gid=1000, cwd="/target_dir",
                 mounts=Dict(
                     "/elfshaker:ro"     => elfshaker_jll.artifact_dir,
                     "/data_dir"         => joinpath(data_dir, db),
