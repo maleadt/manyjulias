@@ -160,3 +160,20 @@ function extract_readonly!(db::String, commit, dir)
     unprepare(dir)
     return dir
 end
+
+# elfshaker's permissions are sometimes too restrictive for shared use
+function update_permissions!(db::String; dir_mode=0o0755, file_mode=0o644)
+    db_data_dir = joinpath(data_dir, db)
+
+    function process(path)
+        if isdir(path)
+            chmod(path, dir_mode)
+            foreach(process, readdir(path; join=true))
+        elseif isfile(path)
+            chmod(path, file_mode)
+        end
+    end
+    process(db_data_dir)
+
+    return
+end
