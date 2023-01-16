@@ -36,7 +36,12 @@ function julia_checkout!(commit, dir)
     run(`$(git()) -C $dir reset --quiet --hard $commit`)
     return dir
 end
-julia_checkout(commit) = julia_checkout!(commit, mktempdir())
+
+# lookup a revision specifier
+function julia_lookup(rev)
+    julia = julia_repo()
+    return split(read(`$(git()) -C $julia rev-parse $rev --`, String), '\n')[1]
+end
 
 # determine the Julia release a commit belongs to.
 # this is determined by looking at the VERSION file, so it only identifies the release.

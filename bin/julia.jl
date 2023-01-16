@@ -10,11 +10,12 @@ const MAX_LOOSE_COMMITS = 32
 function usage(error=nothing)
     error !== nothing && println("Error: $error\n")
     println("""
-        Usage: $(basename(@__FILE__)) [options] [commit] [julia args]
+        Usage: $(basename(@__FILE__)) [options] [rev] [julia args]
 
-        This script launches Julia from a given commit, if available in a pack.
+        This script launches Julia from a given revision, if available in a pack.
 
         The first positional argument determines which commit of Julia to launch.
+        This revision can be specified as a commit SHA, branch or tag name, etc.
         Any remaining arguments are passed to the launched Julia process.
 
         Options:
@@ -22,7 +23,7 @@ function usage(error=nothing)
     exit(error === nothing ? 0 : 1)
 end
 
-function main(all_args)
+function main(all_args...)
     # split args based on the first positional one
     # XXX: using `--` is cleaner, but doesn't work (JuliaLang/julia#48269)
     args = String[]
@@ -44,11 +45,15 @@ function main(all_args)
 
     # determine the commit and its release version
     if isempty(args)
-        usage("Missing commit argument")
+        usage("Missing revision argument")
     elseif length(args) > 1
         usage("Too many arguments")
     end
-    commit = args[1]
+    rev = args[1]
+    commit = manyjulias.julia_lookup(rev)
+    if rev != commit
+        @info "Translated requested revision $rev to commit $commit"
+    end
     version = manyjulias.julia_commit_version(commit)
     db = "julia-$(version.major).$(version.minor)"
 
@@ -94,4 +99,4 @@ function launch(commit, child_args; db)
     end
 end
 
-isinteractive() || main(ARGS)
+isinteractive() || main(ARGS...)
