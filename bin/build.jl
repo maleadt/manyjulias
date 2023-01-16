@@ -75,13 +75,14 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String)
     end
     @info "Building $(length(commits_to_build)) commits ($ntasks builds in parallel)"
     p = Progress(length(commits_to_build); desc="Building pack: ")
+    nproc = max(1, fld(ntasks, length(commits_to_build)))
     asyncmap(commits_to_build; ntasks) do commit
         source_dir = mktempdir(work_dir)
         install_dir = mktempdir(work_dir)
 
         try
             manyjulias.julia_checkout!(commit, source_dir)
-            manyjulias.build!(source_dir, install_dir; nproc=1, echo=(ntasks == 1))
+            manyjulias.build!(source_dir, install_dir; nproc, echo=(ntasks == 1))
             manyjulias.store!(db, commit, install_dir)
         catch err
             if !isa(err, manyjulias.BuildError)
