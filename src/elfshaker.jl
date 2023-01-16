@@ -46,14 +46,23 @@ end
 function store!(db::String, commit, dir)
     prepare(dir)
     lock(elfshaker_lock) do
-        run(elfshaker_cmd(db, `store $commit`; dir))
+        try
+            run(elfshaker_cmd(db, `store $commit`; dir))
+        finally
+            rm_trash!(db)
+        end
     end
     rm(dir; recursive=true)
 end
 
 function extract!(db::String, commit, dir)
     lock(elfshaker_lock) do
-        run(elfshaker_cmd(db, `extract --reset $commit`; dir))
+        try
+            run(elfshaker_cmd(db, `extract --reset $commit`; dir))
+        finally
+            fixup_permissions!(db)
+            rm_trash!(db)
+        end
     end
     unprepare(dir)
     return dir
@@ -69,7 +78,11 @@ end
 
 function pack(db::String, name)
     lock(elfshaker_lock) do
-        run(elfshaker_cmd(db, `pack $name`))
+        try
+            run(elfshaker_cmd(db, `pack $name`))
+        finally
+            fixup_permissions!(db)
+        end
     end
 end
 
@@ -161,11 +174,16 @@ function extract_readonly!(db::String, commit, dir)
     return dir
 end
 
-# we want the database to be usable by other users (via extract_readonly!)
-function allow_shared_access!(db::String)
+function rm_trash!(db::String)
+    # remove elfshaker's temporary dir
+    # (which causes EPERM when other users try to extract)
+    db_data_dir = joinpath(data_dir, db)
+    rm(joinpath(db_data_dir, "trash"); recursive=true, force=true)
+end
+
+function fixup_permissions!(db::String)
     db_data_dir = joinpath(data_dir, db)
 
-    # make sure files in the database are accessible to other users
     function process(path)
         if isdir(path)
             chmod(path, 0o0755)
@@ -175,10 +193,6 @@ function allow_shared_access!(db::String)
         end
     end
     process(db_data_dir)
-
-    # get rid of the `trash` directory, which the other users' elfshaker will
-    # want to access (and even with overlayfs, we get EPERM if it exists)
-    rm(joinpath(db_data_dir, "trash"); recursive=true, force=true)
 
     return
 end
