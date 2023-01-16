@@ -15,7 +15,7 @@ const MAX_LOOSE_COMMITS = 32
 function usage(error=nothing)
     error !== nothing && println("Error: $error\n")
     println("""
-        Usage: $(basename(@__FILE__)) [options] [rev] [julia args]
+        Usage: manyjulias/bin/$(basename(@__FILE__)) [options] [rev] [julia args]
 
         This script launches Julia from a given revision, if available in a pack.
 
@@ -24,8 +24,39 @@ function usage(error=nothing)
         Any remaining arguments are passed to the launched Julia process.
 
         Options:
-            --help              Show this help message.""")
+            --help              Show this help message.
+            --list              List the available revisions.""")
     exit(error === nothing ? 0 : 1)
+end
+
+function list()
+    stats = []
+
+    branch_commits = manyjulias.julia_branch_commits()
+    for version in sort(collect(keys(branch_commits)))
+        db = "julia-$(version.major).$(version.minor)"
+        available_commits = Set(union(manyjulias.list(db).loose,
+                                values(manyjulias.list(db).packed)...))
+        if !isempty(available_commits)
+            push!(stats, (; version,
+                            available=length(available_commits),
+                            total=length(manyjulias.julia_commits(version))))
+        end
+    end
+
+    if isempty(stats)
+        println("No revisions available.")
+    else
+        println("Available commits:")
+        for stat in stats
+            println("- Julia $(stat.version.major).$(stat.version.minor): $(stat.available)/$(stat.total) commits")
+        end
+    end
+
+    println()
+    println("To build more commits, execute `manyjulias/bin/build.jl RELEASE`.")
+
+    exit(0)
 end
 
 function main(all_args...)
@@ -47,6 +78,7 @@ function main(all_args...)
 
     args, opts = manyjulias.parse_args(args)
     haskey(opts, "help") && usage()
+    haskey(opts, "list") && list()
 
     # determine the commit and its release version
     if isempty(args)

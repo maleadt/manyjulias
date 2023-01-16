@@ -102,7 +102,7 @@ end
 function usage(error=nothing)
     error !== nothing && println("Error: $error\n")
     println("""
-        Usage: $(basename(@__FILE__)) [options] [releases]
+        Usage: manyjulias/bin/$(basename(@__FILE__)) [options] [releases]
 
         This script generates the manyjulias packs for given Julia releases.
 
