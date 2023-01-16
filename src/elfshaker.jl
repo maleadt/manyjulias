@@ -161,19 +161,24 @@ function extract_readonly!(db::String, commit, dir)
     return dir
 end
 
-# elfshaker's permissions are sometimes too restrictive for shared use
-function update_permissions!(db::String; dir_mode=0o0755, file_mode=0o644)
+# we want the database to be usable by other users (via extract_readonly!)
+function allow_shared_access!(db::String)
     db_data_dir = joinpath(data_dir, db)
 
+    # make sure files in the database are accessible to other users
     function process(path)
         if isdir(path)
-            chmod(path, dir_mode)
+            chmod(path, 0o0755)
             foreach(process, readdir(path; join=true))
         elseif isfile(path)
-            chmod(path, file_mode)
+            chmod(path, 0o644)
         end
     end
     process(db_data_dir)
+
+    # get rid of the `trash` directory, which the other users' elfshaker will
+    # want to access (and even with overlayfs, we get EPERM if it exists)
+    rm(joinpath(db_data_dir, "trash"); recursive=true, force=true)
 
     return
 end

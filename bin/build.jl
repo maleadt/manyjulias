@@ -41,7 +41,7 @@ function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
         end
     end
 
-    manyjulias.update_permissions!(db)
+    manyjulias.allow_shared_access!(db)
 end
 
 function build_pack(commits; work_dir::String, ntasks::Int, db::String)
