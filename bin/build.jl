@@ -6,15 +6,44 @@ Pkg.activate(dirname(@__DIR__))
 using manyjulias
 using ProgressMeter
 
-function build_pack(commits_to_pack, commits_to_build;
-                    work_dir::String, ntasks::Int, db::String)
+function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
+    @info "Building packs for Julia $version"
+    db = "julia-$(version.major).$(version.minor)"
+
+    # determine packs we want
+    packs = manyjulias.julia_commit_packs(version)
+    packs_available = manyjulias.list(db).packed
+
+    # create each pack
+    existing_packs = manyjulias.list(db).packed
+    for (i, (pack_name, commit_chunk)) in enumerate(packs)
+        # if this pack already exists, skip it
+        safe_pack_name = manyjulias.safe_name("julia-$(pack_name)")
+        if haskey(packs_available, safe_pack_name)
+            @info "Pack $i/$(length(packs)) ($pack_name): already created, containing $(length(packs_available[safe_pack_name]))/$(length(commit_chunk)) commits"
+            continue
+        end
+
+        @info "Creating pack $i/$(length(packs)) ($pack_name) containing $(length(commit_chunk)) commits"
+        build_pack(commit_chunk; work_dir, ntasks, db)
+
+        # close all but the final pack
+        if i !== length(packs)
+            @info "Finalizing pack $pack_name"
+            manyjulias.pack(db, safe_pack_name)
+            manyjulias.rm_loose(db)
+        end
+    end
+end
+
+function build_pack(commits; work_dir::String, ntasks::Int, db::String)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(manyjulias.list(db).loose) do commit
-        !(commit in commits_to_pack)
+        !(commit in commits)
     end
     if !isempty(unrelated_loose_commits)
-        @info "Unrelated loose commits detected; removing"
-        manyjulias.rm_loose()
+        @warn "$(length(unrelated_loose_commits)) unrelated loose commits detected; removing"
+        manyjulias.rm_loose(db)
         # XXX: this may remove too much, but I don't think it's possible to remove select
         #      loose commits, as there's both the indices and the actual objects.
         #      elfshaker gc would help here (elfshaker/elfshaker#97)
@@ -24,7 +53,7 @@ function build_pack(commits_to_pack, commits_to_build;
     # re-extract any packed commits we'll need again
     packs = manyjulias.list(db).packed
     packed_commits = isempty(packs) ? [] : union(values(packs)...)
-    required_packed_commits = filter(commits_to_pack) do commit
+    required_packed_commits = filter(commits) do commit
         commit in packed_commits && !(commit in loose_commits)
     end
     for commit in required_packed_commits
@@ -32,10 +61,14 @@ function build_pack(commits_to_pack, commits_to_build;
         manyjulias.extract!(db, commit, dir)
         manyjulias.store!(db, commit, dir)
     end
+    loose_commits = manyjulias.list(db).loose
 
     # the remaining commits need to be built
-    p = Progress(length(commits_to_pack); desc="Building pack: ",
-                 start=length(commits_to_pack) - length(commits_to_build))
+    commits_to_build = filter(commits) do commit
+        !(commit in loose_commits)
+    end
+    @info "Building $(length(commits_to_build)) commits ($ntasks builds in parallel)"
+    p = Progress(length(commits_to_build); desc="Building pack: ")
     asyncmap(commits_to_build; ntasks) do commit
         source_dir = mktempdir(work_dir)
         install_dir = mktempdir(work_dir)
@@ -60,61 +93,6 @@ function build_pack(commits_to_pack, commits_to_build;
     end
 end
 
-function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
-    @info "Building packs for Julia $version"
-    db = "julia-$(version.major).$(version.minor)"
-
-    # determine packs we want
-    packs = manyjulias.julia_commit_packs(version)
-
-    # find the latest commit we've already stored; we won't pack anything before that
-    # so that we avoid discarding loose commits from the final (uncomplete) pack.
-    commits = union(values(packs)...)
-    available_commits = Set(union(manyjulias.list(db).loose,
-                                  values(manyjulias.list(db).packed)...))
-    last_commit = nothing
-    for commit in reverse(commits)
-        if commit in available_commits
-            last_commit = commit
-            break
-        end
-    end
-    if last_commit !== nothing
-        @info "Last stored commit: $last_commit ($(manyjulias.julia_commit_name(last_commit)))"
-    end
-
-    # create each pack
-    existing_packs = manyjulias.list(db).packed
-    for (i, (pack_name, commit_chunk)) in enumerate(packs)
-        safe_pack_name = manyjulias.safe_name("julia-$(pack_name)")
-        remaining_commits = if last_commit === nothing
-            commit_chunk
-        else
-            last_commit_idx = findfirst(isequal(last_commit), commits)
-            filter(commit_chunk) do commit
-                commit_idx = findfirst(isequal(commit), commits)
-                commit_idx > last_commit_idx
-            end
-        end
-
-        if isempty(remaining_commits)
-            # FIXME: length(existing_pack) does not include loose commits
-            existing_pack = get(existing_packs, safe_pack_name, [])
-            @info "Pack $i/$(length(packs)) ($pack_name): already processed, $(length(existing_pack))/$(length(commit_chunk)) commits built"
-            continue
-        end
-        @info "Pack $i/$(length(packs)) ($pack_name): building $(length(remaining_commits)) commits"
-        build_pack(commit_chunk, remaining_commits; work_dir, ntasks, db)
-
-        # close all but the final pack
-        if i !== length(packs)
-            @info "Closing $pack_name"
-            manyjulias.pack(db, safe_pack_name)
-            manyjulias.rm_loose(db)
-        end
-    end
-end
-
 function usage(error=nothing)
     error !== nothing && println("Error: $error\n")
     println("""
@@ -132,7 +110,7 @@ function usage(error=nothing)
     exit(error === nothing ? 0 : 1)
 end
 
-function main(args; update=true)
+function main(args...; update=true)
     args, opts = manyjulias.parse_args(args)
     haskey(opts, "help") && usage()
 
@@ -164,4 +142,4 @@ function main(args; update=true)
     return
 end
 
-isinteractive() || main(ARGS)
+isinteractive() || main(ARGS...)
