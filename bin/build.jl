@@ -3,7 +3,13 @@
 using Pkg
 Pkg.activate(dirname(@__DIR__))
 
-using manyjulias
+try
+    using manyjulias
+catch err
+    Pkg.instantiate()
+    using manyjulias
+end
+
 using ProgressMeter
 
 function build_version(version::VersionNumber; work_dir::String, ntasks::Int)

@@ -3,7 +3,12 @@
 using Pkg
 Pkg.activate(dirname(@__DIR__))
 
-using manyjulias
+try
+    using manyjulias
+catch err
+    Pkg.instantiate()
+    using manyjulias
+end
 
 const MAX_LOOSE_COMMITS = 32
 
