@@ -110,7 +110,7 @@ function launch(commit, child_args; db)
     proc = try
         manyjulias.extract_readonly!(db, commit, dir)
 
-        cmd = ignorestatus(`$(joinpath(dir, "bin", "julia")) $(child_args...)`)
+        cmd = ignorestatus(`$(joinpath(dir, "bin", "julia")) $(child_args)`)
         run(cmd)
     finally
         rm(dir; recursive=true, force=true)
