@@ -63,7 +63,7 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String)
         commit in packed_commits && !(commit in loose_commits)
     end
     for commit in required_packed_commits
-        dir = mktempdir(work_dir)
+        dir = mktempdir(work_dir; prefix="$(commit)_")
         manyjulias.extract!(db, commit, dir)
         manyjulias.store!(db, commit, dir)
     end
@@ -77,8 +77,8 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String)
     p = Progress(length(commits_to_build); desc="Building pack: ")
     nproc = max(1, fld(ntasks, length(commits_to_build)))
     asyncmap(commits_to_build; ntasks) do commit
-        source_dir = mktempdir(work_dir)
-        install_dir = mktempdir(work_dir)
+        source_dir = mktempdir(work_dir; prefix="$(commit)_")
+        install_dir = mktempdir(work_dir; prefix="$(commit)_")
 
         try
             manyjulias.julia_checkout!(commit, source_dir)
