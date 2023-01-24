@@ -1,14 +1,6 @@
 #!/usr/bin/env julia
 
-using Pkg
-Pkg.activate(dirname(@__DIR__))
-
-try
-    using manyjulias
-catch err
-    Pkg.instantiate()
-    using manyjulias
-end
+using manyjulias
 
 const MAX_LOOSE_COMMITS = 32
 
