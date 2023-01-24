@@ -1,5 +1,8 @@
 #!/usr/bin/env julia
 
+using Pkg
+Pkg.instantiate()
+
 using manyjulias
 
 const MAX_LOOSE_COMMITS = 32
