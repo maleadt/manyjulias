@@ -98,7 +98,8 @@ function main(all_args...)
     available_commits = Set(union(manyjulias.list(db).loose,
                                   values(manyjulias.list(db).packed)...))
     if commit ∉ available_commits
-        error("Commit $commit is not available in any pack. Run `manyjulias/bin/build.jl $(version.major).$(version.minor)` to generate it.")
+        @error("Commit $commit is not available in any pack. Run `manyjulias/bin/build.jl $(version.major).$(version.minor)` to generate it.")
+        exit(125)
     end
 
     launch(commit, child_args; db)
