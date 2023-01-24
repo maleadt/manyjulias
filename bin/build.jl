@@ -68,6 +68,7 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String)
     commits_to_build = filter(commits) do commit
         !(commit in loose_commits)
     end
+    isempty(commits_to_build) && return
     @info "Building $(length(commits_to_build)) commits ($ntasks builds in parallel)"
     p = Progress(length(commits_to_build); desc="Building pack: ")
     nproc = max(1, fld(ntasks, length(commits_to_build)))
