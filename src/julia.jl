@@ -17,6 +17,7 @@ function julia_repo()
             elseif !julia_updated[] &&
                    time() - stat(joinpath(dir, "FETCH_HEAD")).mtime > MIN_JULIA_REPO_AGE
                 @info "Updating Julia repository..."
+                rm(joinpath(dir, "gc.log"); force=true)
                 run(`$(git()) -C $dir fetch --quiet --force origin`)
             end
         end
@@ -228,7 +229,7 @@ end
 # build a Julia source tree and install it
 const artifact_lock = ReentrantLock()   # to prevent concurrent downloads
 function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
-                timeout::Int=3600)
+                timeout::Int=3600, asserts::Bool=false)
     populate_srccache!(source_dir)
 
     # define a Make.user
@@ -239,6 +240,11 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
         # make generated code easier to delta-diff
         println(io, "CFLAGS=-ffunction-sections -fdata-sections")
         println(io, "CXXFLAGS=-ffunction-sections -fdata-sections")
+
+        if asserts
+            println(io, "FORCE_ASSERTIONS=1")
+            println(io, "LLVM_ASSERTIONS=1")
+        end
     end
 
     # build and install Julia

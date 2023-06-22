@@ -20,16 +20,20 @@ function usage(error=nothing)
 
         Options:
             --help              Show this help message.
+            --asserts           Use builds with assertions enabled.
             --list              List the available revisions.""")
     exit(error === nothing ? 0 : 1)
 end
 
-function list()
+function list(; asserts::Bool=false)
     stats = []
 
     branch_commits = manyjulias.julia_branch_commits()
     for version in sort(collect(keys(branch_commits)))
         db = "julia-$(version.major).$(version.minor)"
+        if asserts
+            db *= "-asserts"
+        end
         available_commits = Set(union(manyjulias.list(db).loose,
                                 values(manyjulias.list(db).packed)...))
         if !isempty(available_commits)
@@ -72,8 +76,9 @@ function main(all_args...)
     end
 
     args, opts = manyjulias.parse_args(args)
+    asserts = haskey(opts, "asserts")
     haskey(opts, "help") && usage()
-    haskey(opts, "list") && list()
+    haskey(opts, "list") && list(; asserts)
 
     # determine the commit and its release version
     if isempty(args)
@@ -88,6 +93,9 @@ function main(all_args...)
     end
     version = manyjulias.julia_commit_version(commit)
     db = "julia-$(version.major).$(version.minor)"
+    if asserts
+        db *= "-asserts"
+    end
 
     # check if we have this commit
     available_commits = Set(union(manyjulias.list(db).loose,

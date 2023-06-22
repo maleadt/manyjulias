@@ -7,9 +7,13 @@ using manyjulias
 
 using ProgressMeter
 
-function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
-    @info "Building packs for Julia $version"
+function build_version(version::VersionNumber; work_dir::String, ntasks::Int,
+                       asserts::Bool=false)
+    @info "Building packs for Julia $version (asserts=$asserts)"
     db = "julia-$(version.major).$(version.minor)"
+    if asserts
+        db *= "-asserts"
+    end
 
     # determine packs we want
     packs = manyjulias.julia_commit_packs(version)
@@ -26,7 +30,7 @@ function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
         end
 
         @info "Creating pack $i/$(length(packs)) ($pack_name) containing $(length(commit_chunk)) commits"
-        build_pack(commit_chunk; work_dir, ntasks, db)
+        build_pack(commit_chunk; work_dir, ntasks, db, asserts)
 
         # close all but the final pack
         if i !== length(packs)
@@ -37,7 +41,8 @@ function build_version(version::VersionNumber; work_dir::String, ntasks::Int)
     end
 end
 
-function build_pack(commits; work_dir::String, ntasks::Int, db::String)
+function build_pack(commits; work_dir::String, ntasks::Int, db::String,
+                    asserts::Bool)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(manyjulias.list(db).loose) do commit
         !(commit in commits)
@@ -78,7 +83,8 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String)
 
         try
             manyjulias.julia_checkout!(commit, source_dir)
-            manyjulias.build!(source_dir, install_dir; nproc, echo=(ntasks == 1))
+            manyjulias.build!(source_dir, install_dir; nproc, echo=(ntasks == 1),
+                              asserts)
 
             # smoke test
             julia_exe = joinpath(install_dir, "bin", "julia")
@@ -118,7 +124,7 @@ function usage(error=nothing)
     exit(error === nothing ? 0 : 1)
 end
 
-function main(args...; update=true)
+function main(args...)
     args, opts = manyjulias.parse_args(args)
     haskey(opts, "help") && usage()
 
@@ -145,6 +151,7 @@ function main(args...; update=true)
 
     for version in versions
         build_version(version; work_dir, ntasks)
+        build_version(version; work_dir, ntasks, asserts=true)
     end
 
     return
