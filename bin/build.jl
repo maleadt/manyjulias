@@ -120,12 +120,14 @@ function usage(error=nothing)
         Options:
             --help              Show this help message
             --work-dir          Temporary storage location.
+            --asserts           Build with assertions enabled.
             --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).""")
     exit(error === nothing ? 0 : 1)
 end
 
 function main(args...)
     args, opts = manyjulias.parse_args(args)
+    asserts = haskey(opts, "asserts")
     haskey(opts, "help") && usage()
 
     ntasks = if haskey(opts, "threads")
@@ -150,8 +152,7 @@ function main(args...)
     end
 
     for version in versions
-        build_version(version; work_dir, ntasks)
-        build_version(version; work_dir, ntasks, asserts=true)
+        build_version(version; work_dir, ntasks, asserts)
     end
 
     return
