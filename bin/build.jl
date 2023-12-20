@@ -121,7 +121,8 @@ function usage(error=nothing)
             --help              Show this help message
             --work-dir          Temporary storage location.
             --asserts           Build with assertions enabled.
-            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).""")
+            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).
+                                Building with 1 thread will show the build output.""")
     exit(error === nothing ? 0 : 1)
 end
 
