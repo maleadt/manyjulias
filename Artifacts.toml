@@ -1,14 +1,13 @@
 [debian_minimal]
-git-tree-sha1 = "a5daaaecd41469f8db6315966fbb3d5abced9125"
+git-tree-sha1 = "a62a2f71ab2f680fd78ba018b0e654cc67283142"
 
     [[debian_minimal.download]]
-    sha256 = "88beb5b70b4a6c5b28dd48c8be2cbf456dbebad7af8ed9830f03bce3fc88d26a"
-    url = "https://github.com/JuliaCI/rootfs-images/releases/download/v5.50/debian_minimal.x86_64.tar.gz"
+    sha256 = "f0648b986b2e8264107078000c6bb24cc720bd570d795cc984f4edc910256bc9"
+    url = "https://github.com/JuliaCI/rootfs-images/releases/download/v6.00/debian_minimal.x86_64.tar.gz"
 
 [package_linux]
-git-tree-sha1 = "3e69bfa92895472318457b4bbe7fa349244c41a0"
-lazy = true
+git-tree-sha1 = "4dcde853eb5baaa0a8f087b633eaf955dc94b5dc"
 
     [[package_linux.download]]
-    sha256 = "5b26a76edd76a1bd929495f419db051eb1c69dce1426efe69e9b7459ec4dfef6"
-    url = "https://github.com/JuliaCI/rootfs-images/releases/download/v5.50/package_linux.x86_64.tar.gz"
+    sha256 = "23fdc577422b6d6401dadcf87bfa2b31cc45991617cfcbbbc77ad4cda6c82802"
+    url = "https://github.com/JuliaCI/rootfs-images/releases/download/v6.00/package_linux.x86_64.tar.gz"
