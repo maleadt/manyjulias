@@ -127,6 +127,11 @@ end
 
 function main(args...)
     args, opts = manyjulias.parse_args(args)
+    for opt in keys(opts)
+        if !in(opt, ["help", "work-dir", "asserts", "threads"])
+            usage("Unknown option '$opt'")
+        end
+    end
     asserts = haskey(opts, "asserts")
     haskey(opts, "help") && usage()
 
