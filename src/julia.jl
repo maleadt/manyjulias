@@ -1,47 +1,69 @@
 
 const julia_lock = ReentrantLock()
 
-# only ever update the Julia repo once per session
-const julia_updated = Ref(false)
-# but even then only do it if the repo is at least this old
-const MIN_JULIA_REPO_AGE = 300  # 5 minutes
-
-# get an updated Julia (mirror) repository
+# get or clone the Julia repository
 function julia_repo()
     dir = joinpath(download_dir, "julia")
-    if !ispath(joinpath(dir, "config")) || !julia_updated[]
+    if !ispath(joinpath(dir, "config"))
         lock(julia_lock) do
             if !ispath(joinpath(dir, "config"))
-                @info "Cloning Julia repository..."
+                @info "Performing initial clone of Julia repository..."
                 run(`$(git()) clone --mirror --quiet https://github.com/JuliaLang/julia $dir`)
-            elseif !julia_updated[] &&
-                   time() - stat(joinpath(dir, "FETCH_HEAD")).mtime > MIN_JULIA_REPO_AGE
-                @info "Updating Julia repository..."
-                rm(joinpath(dir, "gc.log"); force=true)
-                run(`$(git()) -C $dir fetch --quiet --force origin`)
             end
         end
     end
-    julia_updated[] = true
-
     return dir
 end
 
-# check-out a specific Julia commit
-function julia_checkout!(commit, dir)
+# update the Julia repository
+function julia_repo_update()
+    dir = julia_repo()
+    lock(julia_lock) do
+        @info "Updating Julia repository..."
+        rm(joinpath(dir, "gc.log"); force=true)
+        run(`$(git()) -C $dir fetch --quiet --force origin`)
+    end
+    return
+end
+
+# verify whether an object exists
+function julia_verify(rev)
     julia = julia_repo()
+    success(`$(git()) -C $julia rev-parse --verify --quiet $rev --`)
+end
+
+# the age of the repository in seconds
+function julia_repo_age()
+    julia = julia_repo()
+    time() - stat(joinpath(julia, "FETCH_HEAD")).mtime
+end
+
+# lookup a revision specifier
+function julia_lookup(rev)
+    julia = julia_repo()
+
+    # if we're looking up a common branch, make sure the repository is up to date
+    if (rev == "master" || startswith(rev, "release-")) && julia_repo_age() > 300
+        julia_repo_update()
+
+    # if the revision we're looking up doesn't exist, try to update first
+    elseif !julia_verify(rev)
+        julia_repo_update()
+    end
+
+    return split(read(`$(git()) -C $julia rev-parse $rev --`, String), '\n')[1]
+end
+
+# check-out a specific Julia commit
+function julia_checkout!(rev, dir)
+    julia = julia_repo()
+    commit = julia_lookup(rev)
 
     # check-out the commit
     mkpath(dir)
     run(`$(git()) clone --quiet $julia $dir`)
     run(`$(git()) -C $dir reset --quiet --hard $commit`)
     return dir
-end
-
-# lookup a revision specifier
-function julia_lookup(rev)
-    julia = julia_repo()
-    return split(read(`$(git()) -C $julia rev-parse $rev --`, String), '\n')[1]
 end
 
 # determine the Julia release a commit belongs to.
@@ -111,6 +133,7 @@ end
 # (i.e., iterating from the branch point to the end of the relevant branch)
 function julia_commits(version)
     julia = manyjulias.julia_repo()
+    julia_repo_update()
 
     branch_commits = julia_branch_commits()
     start_commit = branch_commits[version]
