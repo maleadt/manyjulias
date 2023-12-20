@@ -21,36 +21,57 @@ function usage(error=nothing)
         Options:
             --help              Show this help message.
             --asserts           Use builds with assertions enabled.
-            --list              List the available revisions.""")
+            --status            Summarize the available revisions for this build type.
+                                Pass the release as positional argument to list revisions.""")
     exit(error === nothing ? 0 : 1)
 end
 
-function list(; asserts::Bool=false)
+function status(version=nothing; asserts::Bool=false)
     stats = []
 
-    branch_commits = manyjulias.julia_branch_commits()
-    for version in sort(collect(keys(branch_commits)))
-        db = "julia-$(version.major).$(version.minor)"
+    if version === nothing
+        branch_commits = manyjulias.julia_branch_commits()
+        for version in sort(collect(keys(branch_commits)))
+            db = "julia-$(version.major).$(version.minor)"
+            if asserts
+                db *= "-asserts"
+            end
+            available_commits = Set(union(manyjulias.list(db).loose,
+                                    values(manyjulias.list(db).packed)...))
+            if !isempty(available_commits)
+                push!(stats, (; version,
+                                available=length(available_commits),
+                                total=length(manyjulias.julia_commits(version))))
+            end
+        end
+
+        if isempty(stats)
+            println("No commits available.")
+        else
+            println("Available commits:")
+            for stat in stats
+                println("- Julia $(stat.version.major).$(stat.version.minor): $(stat.available)/$(stat.total) commits")
+            end
+        end
+    else
+        db = "julia-$version"
         if asserts
             db *= "-asserts"
         end
         available_commits = Set(union(manyjulias.list(db).loose,
                                 values(manyjulias.list(db).packed)...))
-        if !isempty(available_commits)
-            push!(stats, (; version,
-                            available=length(available_commits),
-                            total=length(manyjulias.julia_commits(version))))
+        if isempty(available_commits)
+            println("No commits available for Julia $version.")
+        else
+            println("Available commits for Julia $version:")
+            for commit in sort(collect(available_commits))
+                println("- $commit")
+            end
         end
     end
 
-    if isempty(stats)
-        println("No revisions available.")
-    else
-        println("Available commits:")
-        for stat in stats
-            println("- Julia $(stat.version.major).$(stat.version.minor): $(stat.available)/$(stat.total) commits")
-        end
-    end
+    println()
+    println("To list the actual commits, execute `manyjulias/bin/julia.jl --status RELEASE`.")
 
     println()
     println("To build more commits, execute `manyjulias/bin/build.jl RELEASE`.")
@@ -77,13 +98,13 @@ function main(all_args...)
 
     args, opts = manyjulias.parse_args(args)
     for opt in keys(opts)
-        if !in(opt, ["help", "asserts", "list"])
+        if !in(opt, ["help", "asserts", "status"])
             usage("Unknown option '$opt'")
         end
     end
     asserts = haskey(opts, "asserts")
     haskey(opts, "help") && usage()
-    haskey(opts, "list") && list(; asserts)
+    haskey(opts, "status") && status(args...; asserts)
 
     # determine the commit and its release version
     if isempty(args)
