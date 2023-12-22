@@ -53,6 +53,9 @@ function status(version=nothing; asserts::Bool=false)
                 println("- Julia $(stat.version.major).$(stat.version.minor): $(stat.available)/$(stat.total) commits")
             end
         end
+
+        println()
+        println("To list the actual commits, execute `manyjulias/bin/julia.jl --status RELEASE`.")
     else
         db = "julia-$version"
         if asserts
@@ -69,9 +72,6 @@ function status(version=nothing; asserts::Bool=false)
             end
         end
     end
-
-    println()
-    println("To list the actual commits, execute `manyjulias/bin/julia.jl --status RELEASE`.")
 
     println()
     println("To build more commits, execute `manyjulias/bin/build.jl RELEASE`.")
