@@ -4,6 +4,7 @@ This repository provides scripts and tools to use
 [elfshaker](https://github.com/elfshaker/elfshaker) with Julia for the purpose
 of storing many builds of Julia and being able to quickly launch any of them.
 
+Elfshaker (and thus manyjulias) currently only supports Linux.
 
 ## Quick start
 
