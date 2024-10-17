@@ -4,6 +4,11 @@ This repository provides scripts and tools to use
 [elfshaker](https://github.com/elfshaker/elfshaker) with Julia for the purpose
 of storing many builds of Julia and being able to quickly launch any of them.
 
+## Pre-requisites
+
+You will need to have a copy of Julia locally.
+
+You don't need to have elfshaker installed, as manyjulia will download and use elfshaker_jll.
 
 ## Quick start
 
