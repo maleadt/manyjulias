@@ -347,6 +347,24 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
         rm(workdir; recursive=true)
     end
 
+    # perform a smoke test
+    let julia_exe = joinpath(install_dir, "bin", "julia")
+        output = Pipe()
+        cmd = pipeline(`$julia_exe -e 42`; stdin=devnull, stdout=output, stderr=output)
+        proc = run(cmd; wait=false)
+
+        close(output.in)
+        log_monitor = @async String(read(output))
+
+        wait(proc)
+        close(output)
+        log = fetch(log_monitor)
+
+        if !success(proc)
+            throw(BuildError("Could not execute built Julia binary:\n" * log))
+        end
+    end
+
     # remove some useless stuff
     rm(joinpath(install_dir, "share", "doc"); recursive=true, force=true)
     rm(joinpath(install_dir, "share", "man"); recursive=true, force=true)

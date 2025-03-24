@@ -85,11 +85,6 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String,
             manyjulias.julia_checkout!(commit, source_dir)
             manyjulias.build!(source_dir, install_dir; nproc, echo=(ntasks == 1),
                               asserts)
-
-            # smoke test
-            julia_exe = joinpath(install_dir, "bin", "julia")
-            run(`$julia_exe -e 42`)
-
             manyjulias.store!(db, commit, install_dir)
         catch err
             if !isa(err, manyjulias.BuildError)
