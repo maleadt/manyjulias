@@ -136,3 +136,20 @@ We use elfshaker to store a database of Julia builds. This tool was designed to
 compactly store many LLVM builds, and has achieved impressive compression ratios
 (up to 4000x). Sadly, because of how Julia is build, we do not get the same
 ratios (only about 20x), making it impossible to host these packs.
+
+## Example database sizes
+
+| Julia release      | Size |
+| ------------------ | ---- |
+| julia-1.7          | 55G  |
+| julia-1.8          | 56G  |
+| julia-1.9          | 117G |
+| julia-1.9-asserts  | 115G |
+| julia-1.10         | 121G |
+| julia-1.10-asserts | 121G |
+| julia-1.11         | 159G |
+| julia-1.11-asserts | 159G |
+| julia-1.12         | 286G |
+| julia-1.12-asserts | 286G |
+| julia-1.13         | 176G |
+| julia-1.13-asserts | 177G |
