@@ -151,5 +151,3 @@ ratios (only about 20x), making it impossible to host these packs.
 | julia-1.11-asserts | 159G |
 | julia-1.12         | 286G |
 | julia-1.12-asserts | 286G |
-| julia-1.13         | 176G |
-| julia-1.13-asserts | 177G |
