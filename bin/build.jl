@@ -55,19 +55,7 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String,
         #      elfshaker gc would help here (elfshaker/elfshaker#97)
     end
     loose_commits = manyjulias.list(db).loose
-
-    # re-extract any packed commits we'll need again
-    packs = manyjulias.list(db).packed
-    packed_commits = isempty(packs) ? [] : union(values(packs)...)
-    required_packed_commits = filter(commits) do commit
-        commit in packed_commits && !(commit in loose_commits)
-    end
-    for commit in required_packed_commits
-        dir = mktempdir(work_dir; prefix="$(commit)_")
-        manyjulias.extract!(db, commit, dir)
-        manyjulias.store!(db, commit, dir)
-    end
-    loose_commits = manyjulias.list(db).loose
+    @assert all(in(commits), loose_commits)
 
     # the remaining commits need to be built
     commits_to_build = filter(commits) do commit
