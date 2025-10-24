@@ -57,10 +57,10 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
     loose_commits = manyjulias.list(db).loose
     @assert all(in(commits), loose_commits)
 
-    # the remaining commits need to be built
-    commits_to_build = filter(commits) do commit
-        !(commit in loose_commits)
-    end
+    # build commits starting from the last successful one
+    # (to avoid retrying failed builds unnecessarily)
+    last_built_idx = findlast(in(loose_commits), commits)
+    commits_to_build = isnothing(last_built_idx) ? commits : commits[last_built_idx+1:end]
     isempty(commits_to_build) && return
     @info "Building $(length(commits_to_build)) commits ($njobs builds in parallel, $nthreads threads each)"
     p = Progress(length(commits_to_build); desc="Building pack: ")
