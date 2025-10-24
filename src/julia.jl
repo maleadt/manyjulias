@@ -43,7 +43,11 @@ function julia_lookup(rev)
     julia = julia_repo()
 
     # if we're looking up a common branch, make sure the repository is up to date
-    if (rev == "master" || startswith(rev, "release-")) && julia_repo_age() > 300
+    max_age = 300
+    if rev == "master" || startswith(rev, "release-")
+        max_age = 60
+    end
+    if julia_repo_age() > max_age
         julia_repo_update()
 
     # if the revision we're looking up doesn't exist, try to update first
