@@ -257,7 +257,6 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
 
     # define a Make.user
     open("$source_dir/Make.user", "w") do io
-        println(io, "prefix=/install")
         println(io, "JULIA_CPU_TARGET=$default_cpu_target")
 
         # make generated code easier to delta-diff
@@ -302,10 +301,9 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
             echo "default:" > doc/Makefile
             mkdir -p doc/_build/html
 
-            make -j${nproc} install
-
-            contrib/fixup-libgfortran.sh /install/lib/julia
-            contrib/fixup-libstdc++.sh /install/lib /install/lib/julia""")
+            # use binary-dist instead of install as it bundles additional files
+            make -j${nproc} binary-dist
+            mv julia-*/* /install""")
         close(input)
 
         # collect output
