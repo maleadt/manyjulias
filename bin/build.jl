@@ -7,8 +7,8 @@ using manyjulias
 
 using ProgressMeter
 
-function build_version(version::VersionNumber; work_dir::String, ntasks::Int,
-                       asserts::Bool=false)
+function build_version(version::VersionNumber; work_dir::String, njobs::Int,
+                       nthreads::Int, asserts::Bool=false)
     @info "Building packs for Julia $version (asserts=$asserts)"
     db = "julia-$(version.major).$(version.minor)"
     if asserts
@@ -30,7 +30,7 @@ function build_version(version::VersionNumber; work_dir::String, ntasks::Int,
         end
 
         @info "Creating pack $i/$(length(packs)) ($pack_name) containing $(length(commit_chunk)) commits"
-        build_pack(commit_chunk; work_dir, ntasks, db, asserts)
+        build_pack(commit_chunk; work_dir, njobs, nthreads, db, asserts)
 
         # close all but the final pack
         if i !== length(packs)
@@ -41,8 +41,8 @@ function build_version(version::VersionNumber; work_dir::String, ntasks::Int,
     end
 end
 
-function build_pack(commits; work_dir::String, ntasks::Int, db::String,
-                    asserts::Bool)
+function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
+                    db::String, asserts::Bool)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(manyjulias.list(db).loose) do commit
         !(commit in commits)
@@ -62,16 +62,15 @@ function build_pack(commits; work_dir::String, ntasks::Int, db::String,
         !(commit in loose_commits)
     end
     isempty(commits_to_build) && return
-    @info "Building $(length(commits_to_build)) commits ($ntasks builds in parallel)"
+    @info "Building $(length(commits_to_build)) commits ($njobs builds in parallel, $nthreads threads each)"
     p = Progress(length(commits_to_build); desc="Building pack: ")
-    nproc = max(1, fld(ntasks, length(commits_to_build)))
-    asyncmap(commits_to_build; ntasks) do commit
+    asyncmap(commits_to_build; ntasks=njobs) do commit
         source_dir = mktempdir(work_dir; prefix="$(commit)_")
         install_dir = mktempdir(work_dir; prefix="$(commit)_")
 
         try
             manyjulias.julia_checkout!(commit, source_dir)
-            manyjulias.build!(source_dir, install_dir; nproc, echo=(ntasks == 1),
+            manyjulias.build!(source_dir, install_dir; nproc=nthreads, echo=(njobs == 1),
                               asserts)
             manyjulias.store!(db, commit, install_dir)
         catch err
@@ -104,25 +103,34 @@ function usage(error=nothing)
             --help              Show this help message
             --work-dir          Temporary storage location.
             --asserts           Build with assertions enabled.
-            --threads=<n>       Use <n> threads for building (default: $(Sys.CPU_THREADS)).
-                                Building with 1 thread will show the build output.""")
+            --jobs=<n>, -j<n>   Number of parallel builds (default: $(Sys.CPU_THREADS)).
+                                Building with 1 job will show the build output.
+            --threads=<n>       Number of threads per build (default: 1).""")
     exit(error === nothing ? 0 : 1)
 end
 
 function main(args...)
     args, opts = manyjulias.parse_args(args)
     for opt in keys(opts)
-        if !in(opt, ["help", "work-dir", "asserts", "threads"])
+        if !in(opt, ["help", "work-dir", "asserts", "jobs", "j", "threads"])
             usage("Unknown option '$opt'")
         end
     end
     asserts = haskey(opts, "asserts")
     haskey(opts, "help") && usage()
 
-    ntasks = if haskey(opts, "threads")
-        parse(Int, opts["threads"])
+    njobs = if haskey(opts, "jobs")
+        parse(Int, opts["jobs"])
+    elseif haskey(opts, "j")
+        parse(Int, opts["j"])
     else
         Sys.CPU_THREADS
+    end
+
+    nthreads = if haskey(opts, "threads")
+        parse(Int, opts["threads"])
+    else
+        1
     end
 
     work_dir = if haskey(opts, "work-dir")
@@ -141,7 +149,7 @@ function main(args...)
     end
 
     for version in versions
-        build_version(version; work_dir, ntasks, asserts)
+        build_version(version; work_dir, njobs, nthreads, asserts)
     end
 
     return
