@@ -16,14 +16,25 @@ function julia_repo()
 end
 
 # update the Julia repository
-function julia_repo_update()
+function julia_repo_update(; max_age=300, always=false)
     dir = julia_repo()
+
+    # check if we need to update
+    if !always && julia_repo_age() <= max_age
+        return false
+    end
+
     lock(julia_lock) do
+        # re-check inside the lock in case another thread just updated
+        if !always && julia_repo_age() <= max_age
+            return false
+        end
+
         @info "Updating Julia repository..."
         rm(joinpath(dir, "gc.log"); force=true)
         run(`$(git()) -C $dir fetch --quiet --force origin`)
     end
-    return
+    return true
 end
 
 # verify whether an object exists
@@ -43,16 +54,12 @@ function julia_lookup(rev)
     julia = julia_repo()
 
     # if we're looking up a common branch, make sure the repository is up to date
-    max_age = 300
-    if rev == "master" || startswith(rev, "release-")
-        max_age = 60
-    end
-    if julia_repo_age() > max_age
-        julia_repo_update()
+    always = rev == "master" || startswith(rev, "release-")
+    updated = julia_repo_update(; always)
 
     # if the revision we're looking up doesn't exist, try to update first
-    elseif !julia_verify(rev)
-        julia_repo_update()
+    if !updated && !julia_verify(rev)
+        julia_repo_update(; always=false)
     end
 
     return split(read(`$(git()) -C $julia rev-parse $rev --`, String), '\n')[1]
