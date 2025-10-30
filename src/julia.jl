@@ -149,6 +149,9 @@ function julia_commits(version)
     branch_commits = julia_branch_commits()
     start_commit = branch_commits[version]
     version_branch = julia_branch_name(version)
+    if !julia_verify(version_branch)
+        error("Julia branch '$version_branch' does not exist in the repository.")
+    end
 
     commits = String[]
     for line in eachline(`$(git()) -C $julia rev-list --reverse --topo-order $(start_commit)\~..$version_branch`)
