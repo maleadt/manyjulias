@@ -162,6 +162,12 @@ function julia_commits(version)
         #       a merge shouldn't ever invalidate older, finalized packs.
         push!(commits, line)
     end
+
+    # filter out commits without a VERSION file (e.g., from merged external repos)
+    filter!(commits) do commit
+        success(`$(git()) -C $julia cat-file -e $commit:VERSION`)
+    end
+
     return commits
 end
 
