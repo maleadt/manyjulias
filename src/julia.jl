@@ -18,6 +18,48 @@ function invalidate_repo_handle!()
     end
 end
 
+# Delete all temporary branches created by worktree_add! (matching `worktree-temp-*`).
+# These are cleanup artifacts from the detached worktree workaround.
+function _delete_temp_branches!(repo::LibGit2.GitRepo)
+    # Collect branch names first to avoid modifying while iterating
+    to_delete = String[]
+    iter = LibGit2.GitBranchIter(repo)
+    try
+        for (ref, _btype) in iter
+            bname = LibGit2.branch(ref)
+            close(ref)
+            if startswith(bname, "worktree-temp-")
+                push!(to_delete, bname)
+            end
+        end
+    finally
+        close(iter)
+    end
+
+    # Delete collected branches
+    for name in to_delete
+        ref = LibGit2.lookup_branch(repo, name)
+        if ref !== nothing
+            LibGit2.delete_branch(ref)
+            close(ref)
+        end
+    end
+    return nothing
+end
+
+"""
+    julia_repo_cleanup!()
+
+Clean up stale worktrees and temporary branches from the Julia repository.
+Should be called once at startup or after repo updates.
+"""
+function julia_repo_cleanup!()
+    repo = julia_repo_handle()
+    worktree_prune_stale!(repo)
+    _delete_temp_branches!(repo)
+    return nothing
+end
+
 # Fetch master and release-* branches
 function _fetch_branches!(remote::LibGit2.GitRemote)
     refspecs = [
@@ -78,6 +120,9 @@ function julia_repo_update(; max_age=300, always=false)
         finally
             close(repo)
         end
+
+        # Clean up stale worktrees and temp branches after fetch
+        julia_repo_cleanup!()
 
         # Invalidate the cached repo handle in case refs changed
         invalidate_repo_handle!()
