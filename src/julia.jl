@@ -289,6 +289,9 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
         end
     end
 
+    # Build log will be captured here for use in smoke test
+    build_log = ""
+
     # build and install Julia
     rootfs = lock(artifact_lock) do
         artifact"package_linux"
@@ -353,10 +356,10 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
         wait(proc)
         close(output)
         close(timeout_monitor)
-        log = fetch(log_monitor)
+        build_log = fetch(log_monitor)
 
         if !success(proc)
-            throw(BuildError(log))
+            throw(BuildError(build_log))
         end
     finally
         if VERSION < v"1.9-"    # JuliaLang/julia#47650
@@ -377,10 +380,32 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
 
         wait(proc)
         close(output)
-        log = fetch(log_monitor)
+        smoke_log = fetch(log_monitor)
 
         if !success(proc)
-            throw(BuildError("Could not execute built Julia binary:\n" * log))
+            # Gather diagnostic information
+            listing = try
+                read(`ls -laR $install_dir`, String)
+            catch
+                "[failed to list directory]"
+            end
+
+            # Get last 50 lines of build log
+            build_lines = split(build_log, '\n')
+            build_tail = join(build_lines[max(1, end-49):end], '\n')
+
+            throw(BuildError("""
+                Could not execute built Julia binary.
+
+                === Smoke test output ===
+                $smoke_log
+
+                === Installation directory ===
+                $listing
+
+                === Build log (last 50 lines) ===
+                $build_tail
+                """))
         end
     end
 
