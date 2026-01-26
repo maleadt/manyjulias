@@ -1,6 +1,36 @@
 
 const julia_lock = ReentrantLock()
 
+# Cached LibGit2 repo handle
+const _julia_repo_handle = Ref{Union{Nothing, LibGit2.GitRepo}}(nothing)
+
+function julia_repo_handle()
+    if _julia_repo_handle[] === nothing || !isdir(LibGit2.gitdir(_julia_repo_handle[]))
+        _julia_repo_handle[] = LibGit2.GitRepo(julia_repo())
+    end
+    return _julia_repo_handle[]
+end
+
+function invalidate_repo_handle!()
+    if _julia_repo_handle[] !== nothing
+        close(_julia_repo_handle[])
+        _julia_repo_handle[] = nothing
+    end
+end
+
+# Fetch master and release-* branches
+function _fetch_branches!(remote::LibGit2.GitRemote)
+    refspecs = [
+        "+refs/heads/master:refs/heads/master",
+        "+refs/heads/release-*:refs/heads/release-*"
+    ]
+    try
+        LibGit2.fetch(remote, refspecs)
+    finally
+        close(remote)
+    end
+end
+
 # get or clone the Julia repository
 function julia_repo()
     dir = joinpath(download_dir, "julia")
@@ -8,7 +38,14 @@ function julia_repo()
         lock(julia_lock) do
             if !ispath(joinpath(dir, "config"))
                 @info "Performing initial clone of Julia repository..."
-                run(`$(git()) clone --mirror --quiet https://github.com/JuliaLang/julia $dir`)
+                repo = LibGit2.init(dir, #=bare=# true)
+                try
+                    remote = LibGit2.GitRemote(repo, "origin", "https://github.com/JuliaLang/julia")
+                    _fetch_branches!(remote)
+                finally
+                    close(repo)
+                end
+                invalidate_repo_handle!()
             end
         end
     end
@@ -30,17 +67,33 @@ function julia_repo_update(; max_age=300, always=false)
             return false
         end
 
-        @info "Updating Julia repository..."
+        # Remove gc.log so git's auto-gc can run. Git creates this file when gc
+        # fails (e.g., concurrent access, timeout) and won't retry until removed.
         rm(joinpath(dir, "gc.log"); force=true)
-        run(`$(git()) -C $dir fetch --quiet --force origin`)
+
+        repo = LibGit2.GitRepo(dir)
+        try
+            remote = LibGit2.lookup_remote(repo, "origin")
+            _fetch_branches!(remote)
+        finally
+            close(repo)
+        end
+
+        # Invalidate the cached repo handle in case refs changed
+        invalidate_repo_handle!()
     end
     return true
 end
 
 # verify whether an object exists
 function julia_verify(rev)
-    julia = julia_repo()
-    success(`$(git()) -C $julia rev-parse --verify --quiet $rev --`)
+    repo = julia_repo_handle()
+    try
+        LibGit2.GitObject(repo, rev)
+        return true
+    catch
+        return false
+    end
 end
 
 # the age of the repository in seconds
@@ -51,8 +104,6 @@ end
 
 # lookup a revision specifier
 function julia_lookup(rev)
-    julia = julia_repo()
-
     # if we're looking up a common branch, make sure the repository is up to date
     always = rev == "master" || startswith(rev, "release-")
     updated = julia_repo_update(; always)
@@ -62,58 +113,78 @@ function julia_lookup(rev)
         julia_repo_update(; always=false)
     end
 
-    return split(read(`$(git()) -C $julia rev-parse $rev --`, String), '\n')[1]
+    repo = julia_repo_handle()
+    obj = LibGit2.GitObject(repo, rev)
+    return string(LibGit2.GitHash(obj))
 end
 
 # check-out a specific Julia commit
 function julia_checkout!(rev, dir)
-    julia = julia_repo()
     commit = julia_lookup(rev)
+    repo = julia_repo_handle()
 
-    # check-out the commit
-    mkpath(dir)
-    run(`$(git()) clone --quiet $julia $dir`)
-    run(`$(git()) -C $dir reset --quiet --hard $commit`)
+    # Prune stale worktrees (from previously deleted directories)
+    worktree_prune_stale!(repo)
+
+    # Create detached worktree - fast and shares objects with main repo
+    # Detached means no branch, just the commit. If dir is later deleted
+    # without cleanup, the next prune will handle it.
+    worktree_add!(repo, basename(dir), dir, commit)
+
     return dir
 end
 
 # determine the Julia release a commit belongs to.
 # this is determined by looking at the VERSION file, so it only identifies the release.
 function julia_commit_version(commit)
-    julia = julia_repo()
-    return VersionNumber(readchomp(`$(git()) -C $julia show $commit:VERSION`))
+    repo = julia_repo_handle()
+    blob = LibGit2.GitBlob(repo, "$commit:VERSION")
+    return VersionNumber(strip(String(LibGit2.content(blob))))
+end
+
+# Count commits in range (equivalent to: git rev-list --count end ^start)
+function _count_commits(repo, start_commit, end_commit)
+    walker = LibGit2.GitRevWalker(repo)
+    start_obj = LibGit2.GitObject(repo, start_commit)
+    end_obj = LibGit2.GitObject(repo, end_commit)
+    start_hash = string(LibGit2.GitHash(start_obj))
+    end_hash = string(LibGit2.GitHash(end_obj))
+    LibGit2.push!(walker, "$(start_hash)..$(end_hash)")
+    return count(_ -> true, walker)
+end
+
+# Get the commit that last modified line 1 of a file
+function _blame_line1(repo, commit, path)
+    # Resolve commit ref to a hash (handles both refs like "master" and full hashes)
+    obj = LibGit2.GitObject(repo, commit)
+    commit_hash = LibGit2.GitHash(obj)
+    opts = LibGit2.BlameOptions(max_line=1, newest_commit=commit_hash)
+    blame = LibGit2.GitBlame(repo, path; options=opts)
+    hunk = blame[1]
+    return string(hunk.orig_commit_id)
 end
 
 # Julia version of contrib/commit-name.sh
 function julia_commit_name(commit)
-    julia = julia_repo()
+    repo = julia_repo_handle()
 
     version = julia_commit_version(commit)
 
-    branch_commit = let
-        blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
-        split(blame)[1]
-    end
+    branch_commit = _blame_line1(repo, commit, "VERSION")
 
-    commits = let
-        count = readchomp(`$(git()) -C $julia rev-list --count $commit "^$branch_commit"`)
-        parse(Int, count)
-    end
+    commits = _count_commits(repo, branch_commit, commit)
 
     return "$version.$(commits)"
 end
 
 # determine the points where Julia versions branched
 function julia_branch_commits()
-    julia = manyjulias.julia_repo()
+    repo = julia_repo_handle()
 
     commit = "master"
     branch_commits = Dict{VersionNumber,String}()
     while !haskey(branch_commits, v"1.6")
-        commit = let
-            blame = readchomp(`$(git()) -C $julia blame -L ,1 -sl $commit -- VERSION`)
-            split(blame)[1]
-        end
+        commit = _blame_line1(repo, commit, "VERSION")
 
         version = julia_commit_version(commit)
 
@@ -140,10 +211,19 @@ function julia_branch_name(version)
     end
 end
 
+# check if a commit has a VERSION file (helper for filtering)
+function _has_version_file(repo, commit_hash)
+    try
+        LibGit2.GitBlob(repo, "$commit_hash:VERSION")
+        return true
+    catch
+        return false
+    end
+end
+
 # list all the commits that matter for a given Julia version, sorted oldest to newest
 # (i.e., iterating from the branch point to the end of the relevant branch)
 function julia_commits(version)
-    julia = manyjulias.julia_repo()
     julia_repo_update()
 
     branch_commits = julia_branch_commits()
@@ -153,19 +233,36 @@ function julia_commits(version)
         error("Julia branch '$version_branch' does not exist in the repository.")
     end
 
+    repo = julia_repo_handle()
+
+    # Use LibGit2 GitRevWalker for efficient commit traversal
+    # NOTE: for the commits to be named uniquely according to julia_commit_name, we'd
+    #       need to specify --first-parent in order to exclude merged commits.
+    #       however, as that reduces the usefulness (e.g. to bisect backports),
+    #       we include all commits, albeit in topological order so that introducing
+    #       a merge shouldn't ever invalidate older, finalized packs.
+    walker = LibGit2.GitRevWalker(repo)
+
+    # Set topological sorting with reverse (oldest first)
+    LibGit2.sort!(walker; by=LibGit2.Consts.SORT_TOPOLOGICAL, rev=true)
+
+    # Push the range from start_commit~ to version_branch
+    # This is equivalent to: git rev-list start_commit~..version_branch
+    start_obj = LibGit2.GitObject(repo, "$(start_commit)~")
+    start_hash = string(LibGit2.GitHash(start_obj))
+    branch_obj = LibGit2.GitObject(repo, version_branch)
+    branch_hash = string(LibGit2.GitHash(branch_obj))
+    LibGit2.push!(walker, "$(start_hash)..$(branch_hash)")
+
+    # Collect commits
     commits = String[]
-    for line in eachline(`$(git()) -C $julia rev-list --reverse --topo-order $(start_commit)\~..$version_branch`)
-        # NOTE: for the commits to be named uniquely according to julia_commit_name, we'd
-        #       need to specify --first-parent in order to exclude merged commits.
-        #       however, as that reduces the usefulness (e.g. to bisect backports),
-        #       we include all commits, albeit in topological order so that introducing
-        #       a merge shouldn't ever invalidate older, finalized packs.
-        push!(commits, line)
+    for oid in walker
+        push!(commits, string(oid))
     end
 
     # filter out commits without a VERSION file (e.g., from merged external repos)
     filter!(commits) do commit
-        success(`$(git()) -C $julia cat-file -e $commit:VERSION`)
+        _has_version_file(repo, commit)
     end
 
     return commits
