@@ -307,10 +307,10 @@ function populate_srccache!(source_dir)
                               mounts=Dict("/source:rw" => source_dir),
                               uid=1000, gid=1000, cwd="/source")
         try
+            output_buf = IOBuffer()
             input = Pipe()
-            output = Pipe()
 
-            cmd = pipeline(sandbox_cmd; stdin=input, stdout=output, stderr=output)
+            cmd = pipeline(sandbox_cmd; stdin=input, stdout=output_buf, stderr=output_buf)
             proc = run(cmd; wait=false)
 
             println(input, """
@@ -323,15 +323,10 @@ function populate_srccache!(source_dir)
                 make -C deps getall NO_GIT=1""")
             close(input)
 
-            # collect output
-            close(output.in)
-            log_monitor = @async String(read(output))
-
             wait(proc)
-            close(output)
-            log = fetch(log_monitor)
 
             if !success(proc)
+                log = String(take!(output_buf))
                 @warn "Failed to populate srccache:\n$log"
             end
         finally
@@ -368,7 +363,7 @@ end
 
 # build a Julia source tree and install it
 const artifact_lock = ReentrantLock()   # to prevent concurrent downloads
-function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
+function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
                 timeout::Int=3600, asserts::Bool=false)
     populate_srccache!(source_dir)
 
@@ -401,10 +396,10 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
                           env=Dict("nproc" => string(nproc)),
                           uid=1000, gid=1000, cwd="/source")
     try
+        output_buf = IOBuffer()
         input = Pipe()
-        output = Pipe()
 
-        cmd = pipeline(sandbox_cmd; stdin=input, stdout=output, stderr=output)
+        cmd = pipeline(sandbox_cmd; stdin=input, stdout=output_buf, stderr=output_buf)
         proc = run(cmd; wait=false)
 
         println(input, raw"""
@@ -426,18 +421,6 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
             mv julia-*/* /install""")
         close(input)
 
-        # collect output
-        close(output.in)
-        log_monitor = @async begin
-            io = IOBuffer()
-            while !eof(output)
-                line = readline(output; keep=true)
-                echo && print(line)
-                print(io, line)
-            end
-            return String(take!(io))
-        end
-
         # watch for timeouts
         timeout_monitor = Timer(timeout) do timer
             process_running(proc) || return
@@ -451,9 +434,8 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
         end
 
         wait(proc)
-        close(output)
         close(timeout_monitor)
-        build_log = fetch(log_monitor)
+        build_log = String(take!(output_buf))
 
         if !success(proc)
             throw(BuildError(build_log))
@@ -494,19 +476,14 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
             smoke_test_error("Julia binary not found at $julia_exe")
         end
 
-        output = Pipe()
+        output_buf = IOBuffer()
         cmd = pipeline(ignorestatus(`$julia_exe -e 42`);
-                       stdin=devnull, stdout=output, stderr=output)
+                       stdin=devnull, stdout=output_buf, stderr=output_buf)
         proc = run(cmd; wait=false)
-
-        close(output.in)
-        log_monitor = @async String(read(output))
-
         wait(proc)
-        close(output)
-        smoke_log = fetch(log_monitor)
 
         if !success(proc)
+            smoke_log = String(take!(output_buf))
             smoke_test_error("Could not execute built Julia binary.\n\n=== Smoke test output ===\n$smoke_log")
         end
     end

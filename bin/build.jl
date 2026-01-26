@@ -73,8 +73,7 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
 
         try
             manyjulias.julia_checkout!(commit, source_dir)
-            manyjulias.build!(source_dir, install_dir; nproc=nthreads, echo=(njobs == 1),
-                              asserts)
+            manyjulias.build!(source_dir, install_dir; nproc=nthreads, asserts)
             manyjulias.store!(db, commit, install_dir)
         catch err
             if !isa(err, manyjulias.BuildError)
@@ -107,7 +106,6 @@ function usage(error=nothing)
             --work-dir          Temporary storage location.
             --asserts           Build with assertions enabled.
             --jobs=<n>, -j<n>   Number of parallel builds (default: $(Sys.CPU_THREADS)).
-                                Building with 1 job will show the build output.
             --threads=<n>       Number of threads per build (default: 1).""")
     exit(error === nothing ? 0 : 1)
 end
