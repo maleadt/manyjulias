@@ -77,6 +77,24 @@ function worktree_lookup(repo::LibGit2.GitRepo, name::AbstractString)
 end
 
 """
+    worktree_lookup_or_nothing(repo::GitRepo, name::AbstractString) -> Union{GitWorktree, Nothing}
+
+Lookup a worktree by name, returning `nothing` if it doesn't exist or was removed.
+This is race-condition safe for concurrent worktree operations.
+"""
+function worktree_lookup_or_nothing(repo::LibGit2.GitRepo, name::AbstractString)
+    wt_ptr_ref = Ref{Ptr{Cvoid}}(C_NULL)
+    err = ccall((:git_worktree_lookup, libgit2), Cint,
+                (Ptr{Ptr{Cvoid}}, Ptr{Cvoid}, Cstring),
+                wt_ptr_ref, repo, name)
+    if err < 0
+        # Worktree may have been removed by another thread - that's OK
+        return nothing
+    end
+    return GitWorktree(repo, wt_ptr_ref[])
+end
+
+"""
     worktree_validate(wt::GitWorktree) -> Bool
 
 Check if a worktree is valid. Returns true if valid, false otherwise.
@@ -221,7 +239,8 @@ This is equivalent to `git worktree prune`.
 """
 function worktree_prune_stale!(repo::LibGit2.GitRepo)
     for name in worktree_list(repo)
-        wt = worktree_lookup(repo, name)
+        wt = worktree_lookup_or_nothing(repo, name)
+        wt === nothing && continue  # Already removed by another thread
         try
             if !worktree_validate(wt)
                 worktree_prune!(wt)
@@ -245,7 +264,8 @@ function worktree_remove!(repo::LibGit2.GitRepo, name::AbstractString; force::Bo
         return nothing
     end
 
-    wt = worktree_lookup(repo, name)
+    wt = worktree_lookup_or_nothing(repo, name)
+    wt === nothing && return nothing  # Already removed by another thread
     try
         if force
             worktree_prune!(wt; valid=true, working_tree=true)
