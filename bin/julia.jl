@@ -192,7 +192,7 @@ function main(all_args...)
     rev = args[1]
     commit = manyjulias.julia_lookup(rev)
     if rev != commit
-        @info "Translated requested revision $rev to commit $commit"
+        @debug "Translated requested revision $rev to commit $commit"
     end
     version = manyjulias.julia_commit_version(commit)
     db = "julia-$(version.major).$(version.minor)"

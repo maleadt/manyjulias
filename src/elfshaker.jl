@@ -160,7 +160,16 @@ function extract_readonly!(db::String, commit, dir)
                     "/data_dir"         => joinpath(data_dir, db),
                     "/target_dir:rw"    => dir))
     try
-        run(sandbox_cmd)
+        stderr_buf = IOBuffer()
+        proc = run(pipeline(sandbox_cmd; stderr=stderr_buf); wait=false)
+        wait(proc)
+        if !success(proc)
+            stderr_output = String(take!(stderr_buf))
+            if !isempty(stderr_output)
+                print(stderr, stderr_output)
+            end
+            throw(ProcessFailedException(proc))
+        end
     finally
         if VERSION < v"1.9-"    # JuliaLang/julia#47650
             chmod_recursive(workdir, 0o777)
