@@ -126,12 +126,28 @@ function julia_checkout!(rev, dir)
     # Prune stale worktrees (from previously deleted directories)
     worktree_prune_stale!(repo)
 
+    # Remove any existing worktree with this name (handles interrupted builds
+    # where mktempdir recreated a directory with the same name)
+    worktree_remove!(repo, basename(dir); force=true)
+
     # Create detached worktree - fast and shares objects with main repo
     # Detached means no branch, just the commit. If dir is later deleted
     # without cleanup, the next prune will handle it.
     worktree_add!(repo, basename(dir), dir, commit)
 
     return dir
+end
+
+"""
+    julia_checkout_cleanup!(dir)
+
+Clean up worktree metadata for a checkout directory.
+Safe to call even if worktree was never created or already cleaned up.
+"""
+function julia_checkout_cleanup!(dir)
+    repo = julia_repo_handle()
+    worktree_remove!(repo, basename(dir); force=true)
+    return nothing
 end
 
 # determine the Julia release a commit belongs to.

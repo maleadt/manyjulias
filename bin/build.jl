@@ -84,6 +84,13 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
             err_tail = join(err_lines[end-min(50,length(err_lines))+1:end], '\n')
             @error "Failed to build $commit:\n$err_tail"
         finally
+            # Clean up worktree metadata before removing directories
+            try
+                manyjulias.julia_checkout_cleanup!(source_dir)
+            catch e
+                @warn "Failed to clean up worktree for $source_dir" exception=(e, catch_backtrace())
+            end
+
             rm(source_dir; recursive=true, force=true)
             rm(install_dir; recursive=true, force=true)
             next!(p)

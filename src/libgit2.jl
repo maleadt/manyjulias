@@ -232,3 +232,30 @@ function worktree_prune_stale!(repo::LibGit2.GitRepo)
     end
     return nothing
 end
+
+"""
+    worktree_remove!(repo::GitRepo, name::AbstractString; force::Bool=false)
+
+Remove a worktree by name. If `force=true`, removes even if valid (directory exists).
+No-op if worktree doesn't exist.
+"""
+function worktree_remove!(repo::LibGit2.GitRepo, name::AbstractString; force::Bool=false)
+    names = worktree_list(repo)
+    if !(name in names)
+        return nothing
+    end
+
+    wt = worktree_lookup(repo, name)
+    try
+        if force
+            worktree_prune!(wt; valid=true, working_tree=true)
+        else
+            if !worktree_validate(wt)
+                worktree_prune!(wt)
+            end
+        end
+    finally
+        close(wt)
+    end
+    return nothing
+end
