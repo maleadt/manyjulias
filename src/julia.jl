@@ -36,11 +36,15 @@ function _delete_temp_branches!(repo::LibGit2.GitRepo)
         close(iter)
     end
 
-    # Delete collected branches
+    # Delete collected branches (best-effort - skip branches still in use)
     for name in to_delete
         ref = LibGit2.lookup_branch(repo, name)
         if ref !== nothing
-            LibGit2.delete_branch(ref)
+            try
+                LibGit2.delete_branch(ref)
+            catch
+                # Branch may still be HEAD of an active worktree - skip it
+            end
             close(ref)
         end
     end
