@@ -5,6 +5,7 @@
 # See: https://github.com/JuliaLang/julia
 
 using LibGit2_jll: libgit2
+using Random: randstring
 
 # Worktree type following LibGit2 stdlib patterns
 mutable struct GitWorktree <: LibGit2.AbstractGitObject
@@ -159,8 +160,10 @@ function worktree_add!(repo::LibGit2.GitRepo, name::AbstractString,
     commit_hash = LibGit2.GitHash(commit_obj)
 
     # WORKAROUND: git_worktree_add requires a branch reference, not a commit.
-    # Create a temporary branch at the target commit.
-    temp_branch_name = "worktree-temp-$name"
+    # Create a temporary branch at the target commit. Use random suffix to avoid
+    # conflicts with stale worktrees from interrupted builds that may still
+    # reference old temp branches.
+    temp_branch_name = "worktree-temp-$name-$(randstring(8))"
     branch_ref = LibGit2.create_branch(repo, temp_branch_name, commit_obj; force=true)
 
     wt_ptr_ref = Ref{Ptr{Cvoid}}(C_NULL)
