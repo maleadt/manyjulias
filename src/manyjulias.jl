@@ -4,7 +4,6 @@ using Scratch, TOML, DataStructures, LazyArtifacts, JSON3, Random, Preferences, 
 using elfshaker_jll, crun_jll
 
 include("utils.jl")
-include("libgit2.jl")
 include("julia.jl")
 include("elfshaker.jl")
 include("sandbox.jl")

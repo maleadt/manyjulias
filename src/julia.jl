@@ -18,52 +18,6 @@ function invalidate_repo_handle!()
     end
 end
 
-# Delete all temporary branches created by worktree_add! (matching `worktree-temp-*`).
-# These are cleanup artifacts from the detached worktree workaround.
-function _delete_temp_branches!(repo::LibGit2.GitRepo)
-    # Collect branch names first to avoid modifying while iterating
-    to_delete = String[]
-    iter = LibGit2.GitBranchIter(repo)
-    try
-        for (ref, _btype) in iter
-            bname = LibGit2.branch(ref)
-            close(ref)
-            if startswith(bname, "worktree-temp-")
-                push!(to_delete, bname)
-            end
-        end
-    finally
-        close(iter)
-    end
-
-    # Delete collected branches (best-effort - skip branches still in use)
-    for name in to_delete
-        ref = LibGit2.lookup_branch(repo, name)
-        if ref !== nothing
-            try
-                LibGit2.delete_branch(ref)
-            catch
-                # Branch may still be HEAD of an active worktree - skip it
-            end
-            close(ref)
-        end
-    end
-    return nothing
-end
-
-"""
-    julia_repo_cleanup!()
-
-Clean up stale worktrees and temporary branches from the Julia repository.
-Should be called once at startup or after repo updates.
-"""
-function julia_repo_cleanup!()
-    repo = julia_repo_handle()
-    worktree_prune_stale!(repo)
-    _delete_temp_branches!(repo)
-    return nothing
-end
-
 # Fetch master and release-* branches
 function _fetch_branches!(remote::LibGit2.GitRemote)
     refspecs = [
@@ -125,9 +79,6 @@ function julia_repo_update(; max_age=300, always=false)
             close(repo)
         end
 
-        # Clean up stale worktrees and temp branches after fetch
-        julia_repo_cleanup!()
-
         # Invalidate the cached repo handle in case refs changed
         invalidate_repo_handle!()
     end
@@ -170,19 +121,17 @@ end
 # check-out a specific Julia commit
 function julia_checkout!(rev, dir)
     commit = julia_lookup(rev)
-    repo = julia_repo_handle()
+    bare_repo = julia_repo()
 
-    # Prune stale worktrees (from previously deleted directories)
-    worktree_prune_stale!(repo)
-
-    # Remove any existing worktree with this name (handles interrupted builds
-    # where mktempdir recreated a directory with the same name)
-    worktree_remove!(repo, basename(dir); force=true)
-
-    # Create detached worktree - fast and shares objects with main repo
-    # Detached means no branch, just the commit. If dir is later deleted
-    # without cleanup, the next prune will handle it.
-    worktree_add!(repo, basename(dir), dir, commit)
+    # Clone from local bare repo (fast, shares objects via hardlinks)
+    repo = LibGit2.clone(bare_repo, dir; isbare=false)
+    try
+        # Checkout the specific commit's files (build doesn't need HEAD set)
+        obj = LibGit2.GitObject(repo, commit)
+        LibGit2.checkout_tree(repo, obj)
+    finally
+        close(repo)
+    end
 
     return dir
 end
@@ -190,12 +139,10 @@ end
 """
     julia_checkout_cleanup!(dir)
 
-Clean up worktree metadata for a checkout directory.
-Safe to call even if worktree was never created or already cleaned up.
+No-op cleanup function. With local clones (instead of worktrees), cleanup
+is handled by simply removing the directory.
 """
 function julia_checkout_cleanup!(dir)
-    repo = julia_repo_handle()
-    worktree_remove!(repo, basename(dir); force=true)
     return nothing
 end
 
