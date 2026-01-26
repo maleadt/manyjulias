@@ -370,6 +370,33 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
 
     # perform a smoke test
     let julia_exe = joinpath(install_dir, "bin", "julia")
+        # Helper to generate diagnostic error message
+        function smoke_test_error(reason)
+            listing = try
+                read(`ls -laR $install_dir`, String)
+            catch
+                "[failed to list directory]"
+            end
+
+            build_lines = split(build_log, '\n')
+            build_tail = join(build_lines[max(1, end-49):end], '\n')
+
+            throw(BuildError("""
+                $reason
+
+                === Installation directory ===
+                $listing
+
+                === Build log (last 50 lines) ===
+                $build_tail
+                """))
+        end
+
+        # Check binary exists before trying to run it
+        if !isfile(julia_exe)
+            smoke_test_error("Julia binary not found at $julia_exe")
+        end
+
         output = Pipe()
         cmd = pipeline(ignorestatus(`$julia_exe -e 42`);
                        stdin=devnull, stdout=output, stderr=output)
@@ -383,29 +410,7 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS, echo::Bool=true,
         smoke_log = fetch(log_monitor)
 
         if !success(proc)
-            # Gather diagnostic information
-            listing = try
-                read(`ls -laR $install_dir`, String)
-            catch
-                "[failed to list directory]"
-            end
-
-            # Get last 50 lines of build log
-            build_lines = split(build_log, '\n')
-            build_tail = join(build_lines[max(1, end-49):end], '\n')
-
-            throw(BuildError("""
-                Could not execute built Julia binary.
-
-                === Smoke test output ===
-                $smoke_log
-
-                === Installation directory ===
-                $listing
-
-                === Build log (last 50 lines) ===
-                $build_tail
-                """))
+            smoke_test_error("Could not execute built Julia binary.\n\n=== Smoke test output ===\n$smoke_log")
         end
     end
 
