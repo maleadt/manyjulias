@@ -80,9 +80,27 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
                 @error "Unexpected error while building $commit" exception=(err, catch_backtrace())
                 rethrow(err)
             end
+
+            # Build diagnostic summary
+            reason_str = if err.reason == :timeout
+                "TIMEOUT"
+            elseif err.reason == :smoke_test_failed
+                "SMOKE TEST FAILED"
+            else
+                "BUILD FAILED"
+            end
+
+            exit_info = if err.termsignal != 0
+                "killed by signal $(err.termsignal)"
+            elseif err.exitcode != -1
+                "exit code $(err.exitcode)"
+            else
+                "unknown exit status"
+            end
+
             err_lines = split(err.log, '\n')
-            err_tail = join(err_lines[end-min(50,length(err_lines))+1:end], '\n')
-            @error "Failed to build $commit:\n$err_tail"
+            err_tail = join(err_lines[max(1, end-99):end], '\n')
+            @error "Failed to build $commit ($reason_str, $exit_info):\n$err_tail"
         finally
             rm(source_dir; recursive=true, force=true)
             rm(install_dir; recursive=true, force=true)

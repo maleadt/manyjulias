@@ -297,7 +297,13 @@ end
 
 struct BuildError <: Exception
     log::String
+    reason::Symbol      # :build_failed, :timeout, :smoke_test_failed
+    exitcode::Int       # Process exit code (-1 if killed by signal or unknown)
+    termsignal::Int     # Signal that killed process (0 if normal exit)
 end
+
+# Convenience constructor for backwards compatibility
+BuildError(log::String) = BuildError(log, :build_failed, -1, 0)
 
 # populate Julia's srccache
 const srccache_lock = ReentrantLock()
@@ -434,8 +440,10 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
         close(input)
 
         # watch for timeouts
+        timed_out = Ref(false)
         timeout_monitor = Timer(timeout) do timer
             process_running(proc) || return
+            timed_out[] = true
             # TODO: why doesn't `crun kill --all` work?
             recursive_kill(proc, Base.SIGTERM)
             t = Timer(10) do timer
@@ -450,7 +458,10 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
         build_log = String(take!(output_buf))
 
         if !success(proc)
-            throw(BuildError(build_log))
+            reason = timed_out[] ? :timeout : :build_failed
+            exitcode = proc.exitcode
+            termsignal = proc.termsignal
+            throw(BuildError(build_log, reason, exitcode, termsignal))
         end
     finally
         if VERSION < v"1.9-"    # JuliaLang/julia#47650
@@ -462,7 +473,7 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
     # perform a smoke test
     let julia_exe = joinpath(install_dir, "bin", "julia")
         # Helper to generate diagnostic error message
-        function smoke_test_error(reason)
+        function smoke_test_error(reason; exitcode::Int=-1, termsignal::Int=0)
             listing = try
                 read(`ls -laR $install_dir`, String)
             catch
@@ -480,7 +491,7 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
 
                 === Build log (last 50 lines) ===
                 $build_tail
-                """))
+                """, :smoke_test_failed, exitcode, termsignal))
         end
 
         # Check binary exists before trying to run it
@@ -496,7 +507,8 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
 
         if !success(proc)
             smoke_log = String(take!(output_buf))
-            smoke_test_error("Could not execute built Julia binary.\n\n=== Smoke test output ===\n$smoke_log")
+            smoke_test_error("Could not execute built Julia binary.\n\n=== Smoke test output ===\n$smoke_log";
+                             exitcode=proc.exitcode, termsignal=proc.termsignal)
         end
     end
 
