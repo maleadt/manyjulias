@@ -320,7 +320,7 @@ function populate_srccache!(source_dir)
         rootfs = lock(artifact_lock) do
             artifact"package_linux"
         end
-        workdir = mktempdir()
+        workdir = mktempdir("/var/tmp")
         sandbox_cmd = sandbox(`/bin/bash -l`; workdir, rootfs,
                               mounts=Dict("/source:rw" => source_dir),
                               uid=1000, gid=1000, cwd="/source")
@@ -406,7 +406,7 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
     rootfs = lock(artifact_lock) do
         artifact"package_linux"
     end
-    workdir = mktempdir()
+    workdir = mktempdir("/var/tmp")
     name = randstring()
     sandbox_cmd = sandbox(`/bin/bash -l`; name, workdir, rootfs,
                           mounts=Dict("/source:rw" => source_dir,
