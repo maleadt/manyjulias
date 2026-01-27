@@ -24,8 +24,10 @@ function build_usage()
 
         Generate manyjulias packs for given Julia releases.
 
-        The positional arguments should be Julia releases (e.g., "1.9").
-        Defaults to the current development release.
+        Version specifiers:
+            1.10            Build a specific version.
+            1.10+           Build version 1.10 and all newer versions.
+            1.10-1.12       Build versions 1.10 through 1.12 (inclusive).
 
         Options:
             --help              Show this help message.
@@ -72,15 +74,79 @@ function build_main(args)
     end
     mkpath(work_dir)
 
-    # determine which versions to build
-    versions = VersionNumber.(args)
-    if isempty(versions)
-        branch_commits = julia_branch_commits()
-        versions = [maximum(keys(branch_commits))]
+    # No arguments: show help
+    if isempty(args)
+        println(build_usage())
+        return 0
     end
 
+    # Parse version specifiers
+    # Only one range specifier (1.10+ or 1.10-1.12) is allowed
+    range_args = filter(a -> endswith(a, '+') || contains(a, '-'), args)
+    if length(range_args) > 1
+        println("Error: Only one version range specifier is allowed (got: $(join(range_args, ", ")))")
+        return 1
+    end
+
+    branch_commits = nothing  # lazy-load only if needed
+    versions = VersionNumber[]
+    for arg in args
+        if endswith(arg, '+')
+            # "1.10+" syntax: from this version onward
+            min_version = VersionNumber(arg[1:end-1])
+            if isnothing(branch_commits)
+                branch_commits = julia_branch_commits()
+            end
+            all_versions = sort(collect(keys(branch_commits)))
+            matching = filter(v -> v >= min_version, all_versions)
+            if isempty(matching)
+                println("Error: No versions found >= $min_version")
+                return 1
+            end
+            append!(versions, matching)
+        elseif contains(arg, '-')
+            # "1.10-1.12" syntax: version range
+            parts = split(arg, '-'; limit=2)
+            min_version = VersionNumber(parts[1])
+            max_version = VersionNumber(parts[2])
+            if min_version > max_version
+                println("Error: Invalid range $arg (start > end)")
+                return 1
+            end
+            if isnothing(branch_commits)
+                branch_commits = julia_branch_commits()
+            end
+            all_versions = sort(collect(keys(branch_commits)))
+            matching = filter(v -> min_version <= v <= max_version, all_versions)
+            if isempty(matching)
+                println("Error: No versions found in range $min_version to $max_version")
+                return 1
+            end
+            append!(versions, matching)
+        else
+            # Specific version
+            push!(versions, VersionNumber(arg))
+        end
+    end
+    versions = sort(unique(versions))
+
+    if length(versions) > 1
+        @info "Building $(length(versions)) version(s): $(join(versions, ", "))"
+    end
+
+    failed_versions = VersionNumber[]
     for version in versions
-        build_version(version; work_dir, njobs, nthreads, asserts)
+        try
+            build_version(version; work_dir, njobs, nthreads, asserts)
+        catch err
+            @error "Failed to build Julia $version" exception=(err, catch_backtrace())
+            push!(failed_versions, version)
+        end
+    end
+
+    if !isempty(failed_versions)
+        @warn "Failed to build $(length(failed_versions)) version(s): $(join(failed_versions, ", "))"
+        return 1
     end
 
     return 0
