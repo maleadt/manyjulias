@@ -172,3 +172,12 @@ else
         ccall(:jl_fs_access, Cint, (Cstring, Cint), path, W_OK) == 0
     end
 end
+
+
+# Replace current process with another executable
+function execv(path::String, args::Vector{String})
+    c_args = [pointer(arg) for arg in [path; args]]
+    push!(c_args, Ptr{UInt8}(0))
+    ccall(:execv, Cint, (Cstring, Ptr{Ptr{UInt8}}), path, c_args)
+    systemerror("execv")
+end

@@ -81,48 +81,34 @@ function run_main(all_args)
 end
 
 function run_launch(commit, child_args; db)
+    # extract to a temp dir
     dir = mktempdir()
+    extract_readonly!(db, commit, dir)
+    julia_path = joinpath(dir, "bin", "julia")
+    @assert isfile(julia_path)
 
-    proc = try
-        extract_readonly!(db, commit, dir)
-
-        # During precompilation, skip actual process execution (stdin/stdout are PipeEndpoints)
-        ccall(:jl_generating_output, Cint, ()) != 0 && return 0
-
-        cmd = ignorestatus(`$(joinpath(dir, "bin", "julia")) $(child_args)`)
-        proc = run(cmd, stdin, stdout, stderr; wait=false)
-
-        Base.exit_on_sigint(false)
+    # launch a monitor to clean up after we execve
+    parent_pid = getpid()
+    monitor_code = """
         try
-            @sync begin
-                @async while process_running(proc)
-                    try
-                        wait(proc)
-                    catch err
-                        isa(err, InterruptException) || rethrow()
-                        # Forward SIGINT to child
-                        kill(proc, Base.SIGINT)
-                    end
-                end
+            pid = parse(Int, ARGS[1])
+            dirs = ARGS[2:end]
+
+            while ccall(:uv_kill, Cint, (Cint, Cint), pid, 0) == 0
+                sleep(0.1)
             end
-        finally
-            Base.exit_on_sigint(true)
+
+            for d in dirs
+                rm(d; recursive=true, force=true)
+            end
+        catch e
+            @error "Monitor error" exception=(e, catch_backtrace())
         end
+    """
+    monitor_cmd = detach(`$(Base.julia_cmd()) --startup-file=no -e $monitor_code -- $parent_pid $dir $sandbox_dir`)
 
-        proc
-    finally
-        rm(dir; recursive=true, force=true)
+    if ccall(:jl_generating_output, Cint, ()) == 0
+        run(monitor_cmd; wait=false)
+        execv(julia_path, child_args)
     end
-
-    # If the parent process is interactive, we shouldn't exit if the child process failed.
-    isinteractive() && return 0
-
-    success(proc) && return 0
-    proc.exitcode != 0 && return proc.exitcode
-
-    # Re-signal ourselves with child's termination signal
-    sig = proc.termsignal
-    ccall(:signal, Ptr{Cvoid}, (Cint, Ptr{Cvoid}), sig, C_NULL)
-    ccall(:kill, Cint, (Cint, Cint), getpid(), sig)
-    return 128 + sig
 end
