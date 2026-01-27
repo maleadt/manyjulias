@@ -18,7 +18,7 @@ function show_help()
         Usage: manyjulias <command> [args...]
 
         Commands:
-          run <ref> [args...]    $(COMMANDS["run"].desc)
+          [run] <ref> [args...]  $(COMMANDS["run"].desc)
           build [release]        $(COMMANDS["build"].desc)
           verify [release]       $(COMMANDS["verify"].desc)
           status [release]       $(COMMANDS["status"].desc)
