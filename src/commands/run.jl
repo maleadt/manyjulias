@@ -86,29 +86,43 @@ function run_launch(commit, child_args; db)
     proc = try
         extract_readonly!(db, commit, dir)
 
+        # During precompilation, skip actual process execution (stdin/stdout are PipeEndpoints)
+        ccall(:jl_generating_output, Cint, ()) != 0 && return 0
+
         cmd = ignorestatus(`$(joinpath(dir, "bin", "julia")) $(child_args)`)
-        run(cmd)
+        proc = run(cmd, stdin, stdout, stderr; wait=false)
+
+        Base.exit_on_sigint(false)
+        try
+            @sync begin
+                @async while process_running(proc)
+                    try
+                        wait(proc)
+                    catch err
+                        isa(err, InterruptException) || rethrow()
+                        # Forward SIGINT to child
+                        kill(proc, Base.SIGINT)
+                    end
+                end
+            end
+        finally
+            Base.exit_on_sigint(true)
+        end
+
+        proc
     finally
         rm(dir; recursive=true, force=true)
     end
 
-    # if the parent process is interactive, we shouldn't exit if the child process failed.
-    if isinteractive()
-        return 0
-    end
+    # If the parent process is interactive, we shouldn't exit if the child process failed.
+    isinteractive() && return 0
 
-    if success(proc)
-        return 0
-    else
-        # Return the exit code if that is nonzero
-        if proc.exitcode != 0
-            return proc.exitcode
-        end
+    success(proc) && return 0
+    proc.exitcode != 0 && return proc.exitcode
 
-        # If the child instead signalled, we recreate the same signal in ourselves
-        # by first disabling Julia's signal handling and then killing ourselves.
-        ccall(:sigaction, Cint, (Cint, Ptr{Cvoid}, Ptr{Cvoid}), proc.termsignal, C_NULL, C_NULL)
-        ccall(:kill, Cint, (Cint, Cint), getpid(), proc.termsignal)
-        return 128 + proc.termsignal
-    end
+    # Re-signal ourselves with child's termination signal
+    sig = proc.termsignal
+    ccall(:signal, Ptr{Cvoid}, (Cint, Ptr{Cvoid}), sig, C_NULL)
+    ccall(:kill, Cint, (Cint, Cint), getpid(), sig)
+    return 128 + sig
 end

@@ -35,9 +35,7 @@ success(`which git`) && @setup_workload begin
         store!("julia-1.14", commit, build_dir)
 
         # Full CLI run exercises: parse_args, list, extract_readonly!, sandbox
-        redirect_stdout(devnull) do
-            cli_main(["run", "HEAD"])
-        end
+        cli_main(["run", "HEAD"])
 
         invalidate_repo_handle!()
     end
