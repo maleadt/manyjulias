@@ -2,6 +2,19 @@
 
 using ProgressMeter
 
+function format_duration(seconds::Real)
+    if seconds < 60
+        return "$(round(Int, seconds))s"
+    elseif seconds < 3600
+        m, s = divrem(round(Int, seconds), 60)
+        return "$(m)m $(s)s"
+    else
+        h, rem = divrem(round(Int, seconds), 3600)
+        m, s = divrem(rem, 60)
+        return "$(h)h $(m)m $(s)s"
+    end
+end
+
 const BUILD_COMMAND_NAME = "build"
 const BUILD_COMMAND_DESC = "Build Julia packs for releases"
 
@@ -141,6 +154,7 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
     asyncmap(commits_to_build; ntasks=njobs) do commit
         source_dir = mktempdir(work_dir; prefix="$(commit)_")
         install_dir = mktempdir(work_dir; prefix="$(commit)_")
+        start_time = time()
 
         try
             julia_checkout!(commit, source_dir)
@@ -169,9 +183,10 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
                 "unknown exit status"
             end
 
+            duration_str = format_duration(time() - start_time)
             err_lines = split(err.log, '\n')
             err_tail = join(err_lines[max(1, end-99):end], '\n')
-            @error "Failed to build $commit ($reason_str, $exit_info):\n$err_tail"
+            @error "Failed to build $commit ($reason_str, $exit_info, $duration_str):\n$err_tail"
         finally
             rm(source_dir; recursive=true, force=true)
             rm(install_dir; recursive=true, force=true)
