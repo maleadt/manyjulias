@@ -3,29 +3,6 @@ function safe_name(name)
     return replace(name, r"[^a-zA-Z0-9\-_\/]" => "_")
 end
 
-function parse_args(args)
-    opts = Dict{String,Union{String,Missing}}()
-    positional = String[]
-    for arg in args
-        if startswith(arg, "--")
-            if contains(arg, "=")
-                key, val = split(arg, "="; limit=2)
-                opts[key[3:end]] = val
-            else
-                opts[arg[3:end]] = missing
-            end
-        elseif startswith(arg, "-") && length(arg) > 1
-            # Short option: -j4 -> opts["j"] = "4", -v -> opts["v"] = missing
-            key = string(arg[2])
-            opts[key] = length(arg) > 2 ? arg[3:end] : missing
-        else
-            push!(positional, arg)
-        end
-    end
-
-    return positional, opts
-end
-
 
 # list the children of a process.
 # note that this may return processes that have already exited, so beware of TOCTOU.
@@ -184,6 +161,7 @@ function parse_kernel_version(kver_str::AbstractString)
     @warn "Failed to parse kernel version '$kver_str'"
     return nothing
 end
+
 
 # iswritable(path) was added in Julia 1.11
 @static if VERSION >= v"1.11"

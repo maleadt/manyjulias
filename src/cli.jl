@@ -76,3 +76,26 @@ function cli_main(args)
 
     return COMMANDS[command].main(remaining)
 end
+
+function parse_args(args)
+    opts = Dict{String,Union{String,Missing}}()
+    positional = String[]
+    for arg in args
+        if startswith(arg, "--")
+            if contains(arg, "=")
+                key, val = split(arg, "="; limit=2)
+                opts[key[3:end]] = val
+            else
+                opts[arg[3:end]] = missing
+            end
+        elseif startswith(arg, "-") && length(arg) > 1
+            # Short option: -j4 -> opts["j"] = "4", -v -> opts["v"] = missing
+            key = string(arg[2])
+            opts[key] = length(arg) > 2 ? arg[3:end] : missing
+        else
+            push!(positional, arg)
+        end
+    end
+
+    return positional, opts
+end

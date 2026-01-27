@@ -1,3 +1,5 @@
+# elfshaker interface
+
 function elfshaker_cmd(db::String, args; dir=nothing)
     # we maintain multiple elfshaker databases, one for each Julia version.
     db_data_dir = joinpath(data_dir, db)
