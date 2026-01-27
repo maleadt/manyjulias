@@ -7,6 +7,7 @@ include("utils.jl")
 include("julia.jl")
 include("elfshaker.jl")
 include("sandbox.jl")
+include("cli.jl")
 include("precompile.jl")
 
 function __init__()

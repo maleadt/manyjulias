@@ -5,6 +5,7 @@ end
 
 function parse_args(args)
     opts = Dict{String,Union{String,Missing}}()
+    positional = String[]
     for arg in args
         if startswith(arg, "--")
             if contains(arg, "=")
@@ -13,14 +14,16 @@ function parse_args(args)
             else
                 opts[arg[3:end]] = missing
             end
+        elseif startswith(arg, "-") && length(arg) > 1
+            # Short option: -j4 -> opts["j"] = "4", -v -> opts["v"] = missing
+            key = string(arg[2])
+            opts[key] = length(arg) > 2 ? arg[3:end] : missing
+        else
+            push!(positional, arg)
         end
     end
 
-    args = filter(args) do arg
-        !startswith(arg, "--")
-    end
-
-    return args, opts
+    return positional, opts
 end
 
 

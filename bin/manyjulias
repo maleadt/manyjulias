@@ -1,0 +1,11 @@
+#!/usr/bin/env julia
+
+try
+    using manyjulias
+catch
+    using Pkg
+    Pkg.instantiate()
+    using manyjulias
+end
+
+exit(manyjulias.cli_main(ARGS))

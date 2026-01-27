@@ -1,49 +1,100 @@
-#!/usr/bin/env julia
+# Verify command - verify pack integrity
 
-try
-    using manyjulias
-catch
-    using Pkg
-    Pkg.instantiate()
-    using manyjulias
-end
+const VERIFY_COMMAND_NAME = "verify"
+const VERIFY_COMMAND_DESC = "Verify pack integrity"
 
-function usage(error=nothing)
-    error !== nothing && println("Error: $error\n")
-    println("""
-        Usage: manyjulias/bin/$(basename(@__FILE__)) [options] <release>
+function verify_usage()
+    return """
+        Usage: manyjulias verify [options] [releases...]
 
-        Verify pack integrity against expected contents for a Julia release.
+        Verify pack integrity against expected contents for Julia releases.
 
-        The positional argument should be a valid Julia release (e.g., "1.10").
+        If no release is specified, verifies all releases that have packs.
 
         Options:
             --help              Show this help message.
             --asserts           Check assertion-enabled builds.
             --verbose           Show detailed diagnostic output.
-            --fix               Delete packs that don't match expectations.""")
-    exit(error === nothing ? 0 : 1)
+            --fix               Delete packs that don't match expectations."""
 end
 
-function verify(version::VersionNumber; asserts::Bool, fix::Bool, verbose::Bool)
+function verify_main(args)
+    args, opts = parse_args(args)
+    for opt in keys(opts)
+        if !in(opt, ["help", "asserts", "fix", "verbose"])
+            println("Error: Unknown option '$opt'\n")
+            println(verify_usage())
+            return 1
+        end
+    end
+    if haskey(opts, "help")
+        println(verify_usage())
+        return 0
+    end
+    asserts = haskey(opts, "asserts")
+    fix = haskey(opts, "fix")
+    verbose = haskey(opts, "verbose")
+
+    versions = if isempty(args)
+        # Find all versions that have packs
+        discover_versions_with_packs(; asserts)
+    else
+        VersionNumber.(args)
+    end
+
+    if isempty(versions)
+        println("No packs found to verify.")
+        return 0
+    end
+
+    all_valid = true
+    for (i, version) in enumerate(versions)
+        if length(versions) > 1
+            i > 1 && println()
+            println("=== Julia $(version.major).$(version.minor) ===")
+        end
+        valid = verify_packs(version; asserts, fix, verbose)
+        all_valid = all_valid && valid
+    end
+
+    return all_valid ? 0 : 1
+end
+
+function discover_versions_with_packs(; asserts::Bool)
+    versions = VersionNumber[]
+    branch_commits = julia_branch_commits()
+    for version in sort(collect(keys(branch_commits)))
+        db = "julia-$(version.major).$(version.minor)"
+        if asserts
+            db *= "-asserts"
+        end
+        db_list = list(db)
+        if !isempty(db_list.packed)
+            push!(versions, version)
+        end
+    end
+    return versions
+end
+
+function verify_packs(version::VersionNumber; asserts::Bool, fix::Bool, verbose::Bool)
     db = "julia-$(version.major).$(version.minor)"
     if asserts
         db *= "-asserts"
     end
 
-    db_list = manyjulias.list(db)
+    db_list = list(db)
     if isempty(db_list.packed)
         println("No packs found for $db.")
         println()
-        println("To build packs, execute `manyjulias/bin/build.jl $(version.major).$(version.minor)`.")
+        println("To build packs, run `manyjulias build $(version.major).$(version.minor)`.")
         return true
     end
 
     # Compute expected packs
     expected_packs = Dict{String,Vector{String}}()
-    for (pack_name, commits) in manyjulias.julia_commit_packs(version)
-        safe_name = manyjulias.safe_name("julia-$(pack_name)")
-        expected_packs[safe_name] = collect(commits)
+    for (pack_name, commits) in julia_commit_packs(version)
+        sname = safe_name("julia-$(pack_name)")
+        expected_packs[sname] = collect(commits)
     end
 
     if verbose
@@ -131,13 +182,13 @@ function verify(version::VersionNumber; asserts::Bool, fix::Bool, verbose::Bool)
         println()
         println("Deleting invalid packs...")
         for pack_name in packs_to_delete
-            pack_path = joinpath(manyjulias.data_dir, db, "packs", pack_name)
+            pack_path = joinpath(data_dir, db, "packs", pack_name)
             rm(pack_path * ".pack"; force=true)
             rm(pack_path * ".pack.idx"; force=true)
             println("  Deleted $pack_name")
         end
         println()
-        println("Re-run `manyjulias/bin/build.jl $(version.major).$(version.minor)` to recreate deleted packs.")
+        println("Re-run `manyjulias build $(version.major).$(version.minor)` to recreate deleted packs.")
     else
         println()
         println("Run with --fix to delete invalid packs.")
@@ -145,29 +196,3 @@ function verify(version::VersionNumber; asserts::Bool, fix::Bool, verbose::Bool)
 
     return false
 end
-
-function main(args...)
-    args, opts = manyjulias.parse_args(args)
-    for opt in keys(opts)
-        if !in(opt, ["help", "asserts", "fix", "verbose"])
-            usage("Unknown option '$opt'")
-        end
-    end
-    haskey(opts, "help") && usage()
-    asserts = haskey(opts, "asserts")
-    fix = haskey(opts, "fix")
-    verbose = haskey(opts, "verbose")
-
-    if isempty(args)
-        usage("Missing release argument")
-    elseif length(args) > 1
-        usage("Too many arguments")
-    end
-
-    version = VersionNumber(args[1])
-    valid = verify(version; asserts, fix, verbose)
-
-    exit(valid ? 0 : 1)
-end
-
-isinteractive() || main(ARGS...)

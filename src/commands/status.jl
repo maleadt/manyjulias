@@ -1,39 +1,46 @@
-#!/usr/bin/env julia
+# Status command - show available commits and build status
 
-try
-    using manyjulias
-catch
-    using Pkg
-    Pkg.instantiate()
-    using manyjulias
-end
+const STATUS_COMMAND_NAME = "status"
+const STATUS_COMMAND_DESC = "Show available commits and build status"
 
-const MAX_LOOSE_COMMITS = 32
+function status_usage()
+    return """
+        Usage: manyjulias status [options] [release]
 
-function usage(error=nothing)
-    error !== nothing && println("Error: $error\n")
-    println("""
-        Usage: manyjulias/bin/$(basename(@__FILE__)) [options] [rev] [julia args]
+        Summarize the available revisions for builds.
 
-        This script launches Julia from a given revision, if available in a pack.
-
-        The first positional argument determines which commit of Julia to launch.
-        This revision can be specified as a commit SHA, branch or tag name, etc.
-        Any remaining arguments are passed to the launched Julia process.
+        Pass a release (e.g., "1.10") as positional argument to list individual commits.
 
         Options:
             --help              Show this help message.
-            --asserts           Use builds with assertions enabled.
-            --status            Summarize the available revisions for this build type.
-                                Pass the release as positional argument to list revisions.""")
-    exit(error === nothing ? 0 : 1)
+            --asserts           Show assertion-enabled builds."""
 end
 
-function status(version=nothing; asserts::Bool=false)
+function status_main(args)
+    args, opts = parse_args(args)
+    for opt in keys(opts)
+        if !in(opt, ["help", "asserts"])
+            println("Error: Unknown option '$opt'\n")
+            println(status_usage())
+            return 1
+        end
+    end
+    if haskey(opts, "help")
+        println(status_usage())
+        return 0
+    end
+    asserts = haskey(opts, "asserts")
+
+    version = isempty(args) ? nothing : args[1]
+    status_show(version; asserts)
+    return 0
+end
+
+function status_show(version=nothing; asserts::Bool=false)
     stats = []
 
     if version === nothing
-        branch_commits = manyjulias.julia_branch_commits()
+        branch_commits = julia_branch_commits()
         for version in sort(collect(keys(branch_commits)))
             db = "julia-$(version.major).$(version.minor)"
             if asserts
@@ -41,19 +48,19 @@ function status(version=nothing; asserts::Bool=false)
             end
 
             # Get available commits
-            db_list = manyjulias.list(db)
+            db_list = list(db)
             loose_commits = db_list.loose
             packed_commits = isempty(db_list.packed) ? String[] : union(values(db_list.packed)...)
             available_commits = Set(union(loose_commits, packed_commits))
 
             if !isempty(available_commits)
                 # Determine which commits would actually be built
-                all_commits = manyjulias.julia_commits(version)
-                packs = manyjulias.julia_commit_packs(version)
+                all_commits = julia_commits(version)
+                packs = julia_commit_packs(version)
                 unbuilt_commits = String[]
 
                 for (pack_name, commit_chunk) in packs
-                    safe_pack_name = manyjulias.safe_name("julia-$(pack_name)")
+                    safe_pack_name = safe_name("julia-$(pack_name)")
                     if !haskey(db_list.packed, safe_pack_name)
                         # Pack doesn't exist - find commits to build
                         last_built_idx = findlast(in(loose_commits), commit_chunk)
@@ -121,7 +128,7 @@ function status(version=nothing; asserts::Bool=false)
         end
 
         println()
-        println("To list the actual commits, execute `manyjulias/bin/julia.jl --status RELEASE`.")
+        println("To list the actual commits, run `manyjulias status RELEASE`.")
     else
         # Parse version if it's a string
         if isa(version, AbstractString)
@@ -132,7 +139,7 @@ function status(version=nothing; asserts::Bool=false)
         if asserts
             db *= "-asserts"
         end
-        db_list = manyjulias.list(db)
+        db_list = list(db)
         loose_commits = db_list.loose
         packed_commits = isempty(db_list.packed) ? String[] : union(values(db_list.packed)...)
         available_commits = Set(union(loose_commits, packed_commits))
@@ -141,7 +148,7 @@ function status(version=nothing; asserts::Bool=false)
             println("No commits available for Julia $(version.major).$(version.minor).")
         else
             println("Available commits for Julia $(version.major).$(version.minor):")
-            all_commits = manyjulias.julia_commits(version)
+            all_commits = julia_commits(version)
             for commit in all_commits
                 if commit in available_commits
                     println("- $commit")
@@ -151,96 +158,5 @@ function status(version=nothing; asserts::Bool=false)
     end
 
     println()
-    println("To build more commits, execute `manyjulias/bin/build.jl RELEASE`.")
-
-    exit(0)
+    println("To build more commits, run `manyjulias build RELEASE`.")
 end
-
-function main(all_args...)
-    # split args based on the first positional one
-    # XXX: using `--` is cleaner, but doesn't work (JuliaLang/julia#48269)
-    args = String[]
-    for_child = false
-    child_args = String[]
-    for arg in all_args
-        if for_child
-            push!(child_args, arg)
-        else
-            push!(args, arg)
-            if !startswith(arg, "-")
-                for_child = true
-            end
-        end
-    end
-
-    args, opts = manyjulias.parse_args(args)
-    for opt in keys(opts)
-        if !in(opt, ["help", "asserts", "status"])
-            usage("Unknown option '$opt'")
-        end
-    end
-    asserts = haskey(opts, "asserts")
-    haskey(opts, "help") && usage()
-    haskey(opts, "status") && status(args...; asserts)
-
-    # determine the commit and its release version
-    if isempty(args)
-        usage("Missing revision argument")
-    elseif length(args) > 1
-        usage("Too many arguments")
-    end
-    rev = args[1]
-    commit = manyjulias.julia_lookup(rev)
-    if rev != commit
-        @debug "Translated requested revision $rev to commit $commit"
-    end
-    version = manyjulias.julia_commit_version(commit)
-    db = "julia-$(version.major).$(version.minor)"
-    if asserts
-        db *= "-asserts"
-    end
-
-    # check if we have this commit
-    available_commits = Set(union(manyjulias.list(db).loose,
-                                  values(manyjulias.list(db).packed)...))
-    if commit ∉ available_commits
-        @error("Commit $commit is not available in any pack. Run `manyjulias/bin/build.jl $(version.major).$(version.minor)` to generate it.")
-        exit(125)
-    end
-
-    launch(commit, child_args; db)
-end
-
-function launch(commit, child_args; db)
-    dir = mktempdir()
-
-    proc = try
-        manyjulias.extract_readonly!(db, commit, dir)
-
-        cmd = ignorestatus(`$(joinpath(dir, "bin", "julia")) $(child_args)`)
-        run(cmd)
-    finally
-        rm(dir; recursive=true, force=true)
-    end
-
-    # if the parent process is interactive, we shouldn't exit if the child process failed.
-    if isinteractive()
-        return
-    end
-
-    if success(proc)
-        exit(0)
-    else
-        # Return the exit code if that is nonzero
-        if proc.exitcode != 0
-            exit(proc.exitcode)
-        end
-
-        # If the child instead signalled, we recreate the same signal in ourselves
-        # by first disabling Julia's signal handling and then killing ourselves.
-        ccall(:sigaction, Cint, (Cint, Ptr{Cvoid}, Ptr{Cvoid}), proc.termsignal, C_NULL, C_NULL)
-        ccall(:kill, Cint, (Cint, Cint), getpid(), proc.termsignal)
-    end
-end
-
-isinteractive() || main(ARGS...)
