@@ -116,7 +116,10 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
     sandbox_cmd = sandbox(`/bin/bash -l`; name, workdir, rootfs,
                           mounts=Dict("/source:rw" => source_dir,
                                       "/install:rw" => install_dir),
-                          env=Dict("nproc" => string(nproc)),
+                          env=Dict("nproc" => string(nproc),
+                                  "JULIA_IMAGE_THREADS" => "1",
+                                  "JULIA_NUM_THREADS" => "1",
+                                  "JULIA_NUM_PRECOMPILE_TASKS" => string(nproc)),
                           uid=1000, gid=1000, cwd="/source")
     try
         log_file = joinpath(workdir, "build.log")
