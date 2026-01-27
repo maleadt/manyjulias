@@ -81,6 +81,14 @@ function build_version(version::VersionNumber; work_dir::String, njobs::Int,
         db *= "-asserts"
     end
 
+    # Check write permissions early
+    db_dir = joinpath(data_dir, db)
+    check_dir = isdir(db_dir) ? db_dir : data_dir
+    if !iswritable(check_dir)
+        error("You do not have permission to write to the data directory at '$check_dir'")
+    end
+    mkpath(db_dir)
+
     # determine packs we want
     packs = julia_commit_packs(version)
     packs_available = list(db).packed

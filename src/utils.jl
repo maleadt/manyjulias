@@ -184,3 +184,13 @@ function parse_kernel_version(kver_str::AbstractString)
     @warn "Failed to parse kernel version '$kver_str'"
     return nothing
 end
+
+# iswritable(path) was added in Julia 1.11
+@static if VERSION >= v"1.11"
+    const iswritable = Base.Filesystem.iswritable
+else
+    function iswritable(path::String)
+        W_OK = 0x02
+        ccall(:jl_fs_access, Cint, (Cstring, Cint), path, W_OK) == 0
+    end
+end
