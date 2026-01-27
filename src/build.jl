@@ -30,10 +30,10 @@ function populate_srccache!(source_dir)
                               mounts=Dict("/source:rw" => source_dir),
                               uid=1000, gid=1000, cwd="/source")
         try
-            output_buf = IOBuffer()
+            log_file = joinpath(workdir, "srccache.log")
             input = Pipe()
 
-            cmd = pipeline(sandbox_cmd; stdin=input, stdout=output_buf, stderr=output_buf)
+            cmd = pipeline(sandbox_cmd; stdin=input, stdout=log_file, stderr=log_file)
             proc = run(cmd; wait=false)
 
             println(input, """
@@ -49,7 +49,7 @@ function populate_srccache!(source_dir)
             wait(proc)
 
             if !success(proc)
-                log = String(take!(output_buf))
+                log = isfile(log_file) ? read(log_file, String) : ""
                 @warn "Failed to populate srccache:\n$log"
             end
         finally
@@ -119,10 +119,10 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
                           env=Dict("nproc" => string(nproc)),
                           uid=1000, gid=1000, cwd="/source")
     try
-        output_buf = IOBuffer()
+        log_file = joinpath(workdir, "build.log")
         input = Pipe()
 
-        cmd = pipeline(sandbox_cmd; stdin=input, stdout=output_buf, stderr=output_buf)
+        cmd = pipeline(sandbox_cmd; stdin=input, stdout=log_file, stderr=log_file)
         proc = run(cmd; wait=false)
 
         println(input, raw"""
@@ -160,7 +160,7 @@ function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
 
         wait(proc)
         close(timeout_monitor)
-        build_log = String(take!(output_buf))
+        build_log = isfile(log_file) ? read(log_file, String) : ""
 
         if !success(proc)
             reason = timed_out[] ? :timeout : :build_failed

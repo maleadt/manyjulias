@@ -88,7 +88,7 @@ function build_oci_config(sandbox::Sandbox, cmd::Cmd; terminal::Bool)
     process["user"] = (; sandbox.uid, sandbox.gid)
     ## POSIX stuff
     process["rlimits"] = [
-        (type="RLIMIT_NOFILE", hard=1024, soft=1024),
+        (type="RLIMIT_NOFILE", hard=8192, soft=8192),
     ]
     ## Linux stuff
     process["capabilities"] = (
