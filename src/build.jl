@@ -87,7 +87,7 @@ end
 # build a Julia source tree and install it
 const artifact_lock = ReentrantLock()   # to prevent concurrent downloads
 function build!(source_dir, install_dir; nproc=Sys.CPU_THREADS,
-                timeout::Int=3600, asserts::Bool=false)
+                timeout::Int=7200, asserts::Bool=false)
     populate_srccache!(source_dir)
 
     # define a Make.user
