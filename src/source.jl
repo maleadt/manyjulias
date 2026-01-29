@@ -127,9 +127,9 @@ function julia_checkout!(rev, dir)
     # Clone from local bare repo (fast, shares objects via hardlinks)
     repo = LibGit2.clone(bare_repo, dir; isbare=false)
     try
-        # Checkout the specific commit's files (build doesn't need HEAD set)
         obj = LibGit2.GitObject(repo, commit)
         LibGit2.checkout_tree(repo, obj)
+        LibGit2.head!(repo, LibGit2.GitHash(obj))
     finally
         close(repo)
     end
