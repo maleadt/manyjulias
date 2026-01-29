@@ -4,13 +4,15 @@ include("commands/run.jl")
 include("commands/status.jl")
 include("commands/build.jl")
 include("commands/verify.jl")
+include("commands/extract.jl")
 
 # Command registry
 const COMMANDS = Dict{String,NamedTuple{(:desc, :usage, :main), Tuple{String, Function, Function}}}(
     "run"    => (desc=RUN_COMMAND_DESC,    usage=run_usage,    main=run_main),
     "build"  => (desc=BUILD_COMMAND_DESC,  usage=build_usage,  main=build_main),
     "verify" => (desc=VERIFY_COMMAND_DESC, usage=verify_usage, main=verify_main),
-    "status" => (desc=STATUS_COMMAND_DESC, usage=status_usage, main=status_main),
+    "status"  => (desc=STATUS_COMMAND_DESC,  usage=status_usage,  main=status_main),
+    "extract" => (desc=EXTRACT_COMMAND_DESC, usage=extract_usage, main=extract_main),
 )
 
 function show_help()
@@ -22,6 +24,7 @@ function show_help()
           build [release]        $(COMMANDS["build"].desc)
           verify [release]       $(COMMANDS["verify"].desc)
           status [release]       $(COMMANDS["status"].desc)
+          extract <ref> <dir>    $(COMMANDS["extract"].desc)
 
         Run 'manyjulias <command> --help' for command-specific help.""")
 end
