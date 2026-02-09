@@ -3,6 +3,7 @@ module manyjulias
 using Scratch, TOML, DataStructures, LazyArtifacts, JSON3, Random, Preferences, PrecompileTools, LibGit2
 using elfshaker_jll, crun_jll
 
+include("libgit2.jl")
 include("utils.jl")
 include("source.jl")
 include("build.jl")
