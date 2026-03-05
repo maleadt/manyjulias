@@ -88,6 +88,14 @@ function pack(db::String, name)
     end
 end
 
+function rm_pack!(db::String, name)
+    lock(elfshaker_lock) do
+        packs_dir = joinpath(data_dir, db, "packs")
+        rm(joinpath(packs_dir, "$(name).pack"); force=true)
+        rm(joinpath(packs_dir, "$(name).pack.idx"); force=true)
+    end
+end
+
 
 ## extensions
 

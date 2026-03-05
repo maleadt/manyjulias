@@ -15,6 +15,25 @@ function format_duration(seconds::Real)
     end
 end
 
+const MAX_BUILD_RETRIES = 3
+
+function failures_path(db::String)
+    joinpath(data_dir, db, "failures.toml")
+end
+
+function load_failures(db::String)
+    path = failures_path(db)
+    isfile(path) ? Dict{String,Int}(k => v for (k, v) in TOML.parsefile(path)) :
+                   Dict{String,Int}()
+end
+
+function save_failures!(db::String, failures::Dict{String,Int})
+    mkpath(joinpath(data_dir, db))
+    open(failures_path(db), "w") do io
+        TOML.print(io, failures)
+    end
+end
+
 const BUILD_COMMAND_NAME = "build"
 const BUILD_COMMAND_DESC = "Build Julia packs for releases"
 
@@ -34,13 +53,14 @@ function build_usage()
             --work-dir          Temporary storage location.
             --asserts           Build with assertions enabled.
             --jobs=<n>, -j<n>   Number of parallel builds (default: $(Sys.CPU_THREADS)).
-            --threads=<n>       Number of threads per build (default: 1)."""
+            --threads=<n>       Number of threads per build (default: 1).
+            --rebuild     Rebuild incomplete packs to fill in missing commits."""
 end
 
 function build_main(args)
     args, opts = parse_args(args)
     for opt in keys(opts)
-        if !in(opt, ["help", "work-dir", "asserts", "jobs", "j", "threads"])
+        if !in(opt, ["help", "work-dir", "asserts", "jobs", "j", "threads", "rebuild"])
             println("Error: Unknown option '$opt'\n")
             println(build_usage())
             return 1
@@ -51,6 +71,7 @@ function build_main(args)
         return 0
     end
     asserts = haskey(opts, "asserts")
+    rebuild = haskey(opts, "rebuild")
 
     njobs = if haskey(opts, "jobs")
         parse(Int, opts["jobs"])
@@ -137,7 +158,7 @@ function build_main(args)
     failed_versions = VersionNumber[]
     for version in versions
         try
-            build_version(version; work_dir, njobs, nthreads, asserts)
+            build_version(version; work_dir, njobs, nthreads, asserts, rebuild)
         catch err
             @error "Failed to build Julia $version" exception=(err, catch_backtrace())
             push!(failed_versions, version)
@@ -153,7 +174,7 @@ function build_main(args)
 end
 
 function build_version(version::VersionNumber; work_dir::String, njobs::Int,
-                       nthreads::Int, asserts::Bool=false)
+                       nthreads::Int, asserts::Bool=false, rebuild::Bool=false)
     @info "Building packs for Julia $version (asserts=$asserts)"
     db = "julia-$(version.major).$(version.minor)"
     if asserts
@@ -168,22 +189,42 @@ function build_version(version::VersionNumber; work_dir::String, njobs::Int,
     end
     mkpath(db_dir)
 
+    failures = load_failures(db)
+
     # determine packs we want
     packs = julia_commit_packs(version)
     packs_available = list(db).packed
 
     # create each pack
-    existing_packs = list(db).packed
     for (i, (pack_name, commit_chunk)) in enumerate(packs)
-        # if this pack already exists, skip it
         safe_pack_name = safe_name("julia-$(pack_name)")
+
         if haskey(packs_available, safe_pack_name)
-            @info "Pack $i/$(length(packs)) ($pack_name): already created, containing $(length(packs_available[safe_pack_name]))/$(length(commit_chunk)) commits"
-            continue
+            pack_commits = packs_available[safe_pack_name]
+            missing = length(commit_chunk) - length(pack_commits)
+
+            if missing > 0 && rebuild
+                # check if any missing commits are eligible for retry
+                packed_set = Set(pack_commits)
+                eligible = count(commit_chunk) do commit
+                    commit ∉ packed_set && get(failures, commit, 0) < MAX_BUILD_RETRIES
+                end
+                if eligible > 0
+                    @info "Pack $i/$(length(packs)) ($pack_name): $missing missing, $eligible eligible for retry; rebuilding"
+                else
+                    @info "Pack $i/$(length(packs)) ($pack_name): $missing missing, all permanently failed"
+                    continue
+                end
+            else
+                @info "Pack $i/$(length(packs)) ($pack_name): already created, containing $(length(pack_commits))/$(length(commit_chunk)) commits"
+                continue
+            end
         end
 
         @info "Creating pack $i/$(length(packs)) ($pack_name) containing $(length(commit_chunk)) commits"
-        build_pack(commit_chunk; work_dir, njobs, nthreads, db, asserts)
+        build_pack(commit_chunk; work_dir, njobs, nthreads, db, asserts, failures,
+                   old_pack=haskey(packs_available, safe_pack_name) ? safe_pack_name : nothing)
+        save_failures!(db, failures)
 
         # close all but the final pack
         if i !== length(packs)
@@ -195,7 +236,9 @@ function build_version(version::VersionNumber; work_dir::String, njobs::Int,
 end
 
 function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
-                    db::String, asserts::Bool)
+                    db::String, asserts::Bool,
+                    failures::Dict{String,Int}=Dict{String,Int}(),
+                    old_pack::Union{String,Nothing}=nothing)
     # check if we need to clean the slate
     unrelated_loose_commits = filter(list(db).loose) do commit
         !(commit in commits)
@@ -207,15 +250,36 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
         #      loose commits, as there's both the indices and the actual objects.
         #      elfshaker gc would help here (elfshaker/elfshaker#97)
     end
-    loose_commits = list(db).loose
+
+    # recover commits from the old pack before deleting it
+    if old_pack !== nothing
+        old_commits = list(db).packed[old_pack]
+        @info "Recovering $(length(old_commits)) commits from $old_pack"
+        p = Progress(length(old_commits); desc="Recovering commits: ")
+        for commit in old_commits
+            dir = mktempdir(work_dir)
+            extract!(db, commit, dir)
+            store!(db, commit, dir)
+            next!(p)
+        end
+        rm_pack!(db, old_pack)
+    end
+
+    loose_commits = Set(list(db).loose)
     @assert all(in(commits), loose_commits)
 
-    # build commits starting from the last successful one
-    # (to avoid retrying failed builds unnecessarily)
-    last_built_idx = findlast(in(loose_commits), commits)
-    commits_to_build = isnothing(last_built_idx) ? commits : commits[last_built_idx+1:end]
+    # filter out already-built and permanently-failed commits
+    commits_to_build = filter(commits) do commit
+        commit ∉ loose_commits && get(failures, commit, 0) < MAX_BUILD_RETRIES
+    end
     isempty(commits_to_build) && return
-    @info "Building $(length(commits_to_build)) commits ($njobs builds in parallel, $nthreads threads each)"
+    skipped = length(commits) - length(loose_commits) - length(commits_to_build)
+    if skipped > 0
+        @info "Building $(length(commits_to_build)) commits ($njobs builds in parallel, $nthreads threads each), skipping $skipped permanently failed"
+    else
+        @info "Building $(length(commits_to_build)) commits ($njobs builds in parallel, $nthreads threads each)"
+    end
+    failures_lock = ReentrantLock()
     p = Progress(length(commits_to_build); desc="Building pack: ")
     asyncmap(commits_to_build; ntasks=njobs) do commit
         source_dir = mktempdir(work_dir; prefix="$(commit)_")
@@ -226,10 +290,17 @@ function build_pack(commits; work_dir::String, njobs::Int, nthreads::Int,
             julia_checkout!(commit, source_dir)
             build!(source_dir, install_dir; nproc=nthreads, asserts)
             store!(db, commit, install_dir)
+            lock(failures_lock) do
+                delete!(failures, commit)
+            end
         catch err
             if !isa(err, BuildError)
                 @error "Unexpected error while building $commit" exception=(err, catch_backtrace())
                 rethrow(err)
+            end
+
+            lock(failures_lock) do
+                failures[commit] = get(failures, commit, 0) + 1
             end
 
             # Build diagnostic summary
